@@ -58,3 +58,5 @@ cover/
 # Temporary audio / subtitle artifacts
 *.tmp
 *.synced.tmp.srt
+
+.agents/
