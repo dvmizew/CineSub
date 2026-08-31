@@ -641,3 +641,110 @@ def test_multipart_movies_title_enrichment(tmp_path: Path) -> None:
         p.write_bytes(b"\x00" * 131072)
         meta = parse_video_metadata(p, compute_hash=False)
         assert expected_part.lower() in meta.title.lower()
+
+
+def test_real_yts_library_parsing(tmp_path: Path) -> None:
+    cases = [
+        (
+            "El.Ser.Querido.2026.REPACK.1080p.WEBRip.x265.10bit.AAC5.1-[YTS.GG - YTS.BZ].mp4",
+            "El Ser Querido",
+            2026,
+        ),
+        ("Glass.2019.1080p.WEBRip.x264-[YTS.AM].mp4", "Glass", 2019),
+        ("Inception.2010.1080p.BrRip.x264.YIFY.mp4", "Inception", 2010),
+        ("Interstellar.2014.2014.1080p.BluRay.x264.YIFY.mp4", "Interstellar", 2014),
+        (
+            "Khake.Sar.Beh.Mohr.1977.1080p.WEBRip.x264.AAC-[YTS.GG - YTS.BZ].mp4",
+            "Khake Sar Beh Mohr",
+            1977,
+        ),
+        (
+            "Mors.Elling.2003.NORWEGIAN.1080p.WEBRip.x264.AAC5.1-[YTS.GG - YTS.BZ].mp4",
+            "Mors Elling",
+            2003,
+        ),
+        (
+            "Peter.Gabriel.Growing.Up.Live.2003.1080p.WEBRip.x264.AAC5.1-[YTS.GG - YTS.BZ].mp4",
+            "Peter Gabriel Growing Up Live",
+            2003,
+        ),
+        ("The.Mongoose.2026.1080p.WEBRip.x264.AAC-[YTS.GG - YTS.BZ].mp4", "The Mongoose", 2026),
+        (
+            "The.Odyssey.2026.1080p.WEBRip.x265.10bit.AAC5.1-[YTS.GG - YTS.BZ].mp4",
+            "The Odyssey",
+            2026,
+        ),
+    ]
+
+    for fname, exp_title, exp_year in cases:
+        p = tmp_path / fname
+        p.write_bytes(b"\x00" * 131072)
+        meta = parse_video_metadata(p, compute_hash=True)
+        assert meta.title.lower() == exp_title.lower()
+        assert meta.year == exp_year
+        assert meta.moviehash is not None
+
+
+def test_comprehensive_scene_and_p2p_group_clusters(tmp_path: Path) -> None:
+    # 1. Remux / Top-tier Encode Cluster (FraMeSToR <-> CtrlHD <-> DON <-> iFT <-> w4nk3r)
+    f_remux = tmp_path / "Inception.2010.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-FraMeSToR.mkv"
+    f_remux.write_bytes(b"\x00" * 131072)
+    meta_remux = parse_video_metadata(f_remux, compute_hash=False)
+    score_ctrlhd = score_subtitle_candidate(meta_remux, "Inception.2010.1080p.BluRay.x264-CtrlHD")
+    score_other = score_subtitle_candidate(meta_remux, "Inception.2010.1080p.BluRay.x264-UNKNOWN")
+    assert score_ctrlhd > score_other
+
+    # 2. High-tier WEB-DL Cluster (NTb <-> FLUX <-> CMRG <-> KiNGS <-> LAZY <-> TEPES)
+    f_web = tmp_path / "The.Bear.S02E01.1080p.HULU.WEB-DL.DDP5.1.Atmos.H.264-FLUX.mkv"
+    f_web.write_bytes(b"\x00" * 131072)
+    meta_web = parse_video_metadata(f_web, compute_hash=False)
+    score_ntb = score_subtitle_candidate(
+        meta_web, "The.Bear.S02E01.1080p.WEB-DL.DDP5.1.Atmos.H.264-NTb"
+    )
+    assert score_ntb > score_other
+
+    # 3. Compact / Micro-encoders (PSA <-> GalaxyRG <-> TGx <-> PaHe)
+    f_psa = tmp_path / "Dune.2021.1080p.10bit.WEBRip.6CH.x265.HEVC-PSA.mkv"
+    f_psa.write_bytes(b"\x00" * 131072)
+    meta_psa = parse_video_metadata(f_psa, compute_hash=False)
+    score_tgx = score_subtitle_candidate(meta_psa, "Dune.2021.1080p.WEBRip.x264-GalaxyRG")
+    assert score_tgx > score_other
+
+    # 4. Scene Giants (SPARKS <-> ROVERS <-> AMIABLE <-> GECKOS <-> DRONES)
+    f_scene = tmp_path / "The.Matrix.1999.1080p.BluRay.x264-SPARKS.mkv"
+    f_scene.write_bytes(b"\x00" * 131072)
+    meta_scene = parse_video_metadata(f_scene, compute_hash=False)
+    score_rovers = score_subtitle_candidate(meta_scene, "The.Matrix.1999.1080p.BluRay.x264-ROVERS")
+    assert score_rovers > score_other
+
+    # 5. Anime Release & Subbing Groups (Erai-raws <-> SubsPlease <-> HorribleSubs)
+    f_anime = tmp_path / "[Erai-raws] Jujutsu Kaisen - 01 [1080p][HEVC].mkv"
+    f_anime.write_bytes(b"\x00" * 131072)
+    meta_anime = parse_video_metadata(f_anime, compute_hash=False)
+    score_subsplease = score_subtitle_candidate(
+        meta_anime, "[SubsPlease] Jujutsu Kaisen - 01 (1080p)"
+    )
+    assert score_subsplease > score_other
+
+    # 6. Automated & Micro TV Encoders (MeGusta <-> SURCODE <-> PiGNUS <-> EDITH)
+    f_megusta = tmp_path / "Succession.S04E01.720p.HDTV.x265-MeGusta.mkv"
+    f_megusta.write_bytes(b"\x00" * 131072)
+    meta_megusta = parse_video_metadata(f_megusta, compute_hash=False)
+    score_surcode = score_subtitle_candidate(
+        meta_megusta, "Succession.S04E01.720p.HDTV.x264-SURCODE"
+    )
+    assert score_surcode > score_other
+
+    # 7. Asian Trackers (MTeam <-> FRDS <-> CHDBits <-> OurBits)
+    f_mteam = tmp_path / "Parasite.2019.KOREAN.1080p.BluRay.x265-MTeam.mkv"
+    f_mteam.write_bytes(b"\x00" * 131072)
+    meta_mteam = parse_video_metadata(f_mteam, compute_hash=False)
+    score_frds = score_subtitle_candidate(meta_mteam, "Parasite.2019.KOREAN.1080p.BluRay.x264-FRDS")
+    assert score_frds > score_other
+
+    # 8. Eastern European / FileList (PlayHD <-> ROsub <-> FLShare)
+    f_playhd = tmp_path / "Umbre.S03E01.1080p.HBO.WEB-DL.x264-PlayHD.mkv"
+    f_playhd.write_bytes(b"\x00" * 131072)
+    meta_playhd = parse_video_metadata(f_playhd, compute_hash=False)
+    score_rosub = score_subtitle_candidate(meta_playhd, "Umbre.S03E01.1080p.HBO.WEB-DL.x264-ROsub")
+    assert score_rosub > score_other

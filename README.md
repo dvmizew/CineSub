@@ -106,20 +106,23 @@ By default, timestamps are preserved exactly as provided by the author. Pass `--
 Supports single video files or entire directories for batch processing.
 
 ```bash
-# Descarcă cea mai bună subtitrare în limba română (fără modificarea timestamp-urilor)
+# Download the best Romanian subtitle (keeping original timestamps)
 cinesub sync "Dune.Part.Two.2024.1080p.WEBRip.x264-FGT.mp4" -l ro
 
-# Descarcă și aliniază sincronizarea audio cu ffsubsync
+# Download and align audio synchronization with ffsubsync
 cinesub sync "Dune.Part.Two.2024.1080p.WEBRip.x264-FGT.mp4" -l ro --sync
 
-# Descarcă pentru un întreg sezon de serial cu 8 fire de execuție paralele
+# Download for a full TV series season with 8 parallel worker threads
 cinesub sync "/path/to/House.of.the.Dragon.S02" -l ro -t 8
 
-# Sincronizează audio și păstrează copia originală (.orig.srt)
+# Sync audio and keep original subtitle backup (.orig.srt)
 cinesub sync "The.Last.of.Us.S01E01.720p.HDTV.mkv" -l en --sync --backup
 
-# Salvează raportul detaliat în format JSON
-cinesub sync "/path/to/movies" -l ro -t 4 --json sync_report.json
+# Full simulation without downloading or modifying files (Dry Run)
+cinesub sync "/path/to/movies" -l ro --dry-run
+
+# Save batch report as formatted indented JSON or streaming JSONL
+cinesub sync "/path/to/movies" -l ro -j report.jsonl
 ```
 
 **Flags & Options:**
@@ -131,9 +134,10 @@ cinesub sync "/path/to/movies" -l ro -t 4 --json sync_report.json
 | `-s, --sync` | `False` | Align subtitle timestamps against video audio |
 | `-e, --engine` | `ffsubsync` | Synchronization engine: `ffsubsync` (Python/FFmpeg) or `alass` (Rust) |
 | `-S, --lang-suffix` | `False` | Save subtitle with language tag for Plex/Emby (e.g. `movie.ro.srt`) |
+| `-d, --dry-run` | `False` | Simulate search and matching without downloading or modifying files |
 | `-b, --backup` | `False` | Save unsynchronized original as `<name>.orig.srt` |
 | `-t, --threads` | `4` | Number of concurrent worker threads for batch processing |
-| `-j, --json` | `None` | Save structured report to a JSON file |
+| `-j, --json` | `None` | Save structured report to a JSON or JSONL file |
 | `-f, --force` | `False` | Overwrite existing subtitle files (default: skips existing subtitles) |
 | `--verbose` | `False` | Enable debug logging |
 
@@ -144,11 +148,14 @@ cinesub sync "/path/to/movies" -l ro -t 4 --json sync_report.json
 Downloads 5–10 subtitle alternatives across providers into the video directory for manual comparison.
 
 ```bash
-# Descarcă 5 alternative pentru un episod
+# Download 5 subtitle alternatives for a single episode
 cinesub bulk "House.of.the.Dragon.S02E01.1080p.mkv" -l ro -n 5
 
-# Descarcă alternative pentru un întreg folder și exportă în JSON
-cinesub bulk "/path/to/season1" -l en -n 3 -t 4 --json bulk_report.json
+# Simulate bulk download without writing to disk
+cinesub bulk "/path/to/season1" -l en -n 3 --dry-run
+
+# Download alternatives for an entire directory and export to JSON/JSONL
+cinesub bulk "/path/to/season1" -l en -n 3 -t 4 --json bulk_report.jsonl
 ```
 
 Files are named systematically in the video's folder:
@@ -165,8 +172,9 @@ House.of.the.Dragon.S02E01.1080p_3_opensubtitles.srt
 | `-l, --language` | `en` | Subtitle language code |
 | `-n, --limit` | `5` | Number of subtitle variations to download (1–20) |
 | `-p, --provider` | `all` | Provider filter (`all`, `opensubtitles`, `subdl`) |
+| `-d, --dry-run` | `False` | Simulate search without downloading files |
 | `-t, --threads` | `4` | Number of concurrent worker threads |
-| `-j, --json` | `None` | Save structured report to a JSON file |
+| `-j, --json` | `None` | Save structured report to a JSON or JSONL file |
 | `-f, --force` | `False` | Overwrite existing files |
 | `--verbose` | `False` | Enable debug logging |
 
@@ -193,13 +201,14 @@ cinesub config
   - **OpenSubtitles.com**: Official API limit is 5 req/s. CineSub enforces a safe client-side rate limit of **4.0 req/s**.
   - **SubDL.com**: Official API limit is 600 req/min (10 req/s). CineSub enforces **8.0 req/s**.
   - **HTTP 429 Handling**: Token-bucket rate limiters automatically pause all concurrent threads and back off according to `Retry-After` response headers.
-- **Hash Algorithm**: Uses OpenSubtitles' 64-bit checksum over the first and last 64 KB of the file added to the total file size.
+- **Hash Algorithm**: Uses OpenSubtitles' 64-bit checksum over the first and last 64 KB of the file added to the total file size with vectorized 1-shot unpacking.
 - **HTTP Client**: Uses `httpx` with persistent connection pooling, HTTP/2 support, and retry handlers.
 - **JSON Engine**: `orjson` is used for fast serialization and deserialization.
 - **NAS & Plex Library Optimizations**:
   - Prunes non-media and thumbnail directory trees (`@eaDir`, `#recycle`, `.plex`, `Featurettes`, `Trailers`) during traversal for instant scans on large NFS/SMB shares.
   - Automatically skips media with existing valid subtitles (unless `-f, --force` is passed) for efficient incremental cron executions.
   - Supports Plex/Emby language suffix convention (`-S, --lang-suffix`, e.g. `movie.ro.srt`).
+  - Employs atomic file replacement (`os.replace`) to prevent partial read race conditions with Plex Media Scanner.
 - **Archive Extraction**: SubDL `.zip` packages are unpacked in-memory using `io.BytesIO` and `zipfile.ZipFile`.
 
 ---

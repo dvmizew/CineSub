@@ -7,6 +7,7 @@ from typing import Annotated
 
 from cyclopts import App, Parameter
 from dotenv import load_dotenv
+from rich.panel import Panel
 from rich.table import Table
 
 from cinesub import __version__
@@ -24,6 +25,51 @@ app = App(
     help="CineSub - Subtitle searching, downloading, and audio-based synchronization.",
     result_action="return_value",
 )
+
+
+def _render_stats_card(
+    title: str,
+    total: int,
+    success: int,
+    skipped: int,
+    dry_run: int,
+    failed: int,
+    duration: float,
+    throughput: float,
+    is_dry_run: bool = False,
+) -> None:
+    """Render a Sonora-inspired statistics dashboard card with key performance metrics."""
+    stats_grid = Table.grid(expand=True, padding=(0, 2))
+    stats_grid.add_column(justify="center")
+    stats_grid.add_column(justify="center")
+    stats_grid.add_column(justify="center")
+    stats_grid.add_column(justify="center")
+
+    match_pct = (
+        (success / max(1, total)) * 100.0 if not is_dry_run else (dry_run / max(1, total)) * 100.0
+    )
+    action_label = "Dry-Run Matches" if is_dry_run else "Downloaded"
+    action_count = dry_run if is_dry_run else success
+    action_val = f"{action_count} ({match_pct:.1f}%)"
+    action_color = "yellow" if is_dry_run else "green"
+
+    stats_grid.add_row(
+        f"[dim]Total Scanned[/dim]\n[bold white]{total} media files[/bold white]",
+        f"[dim]{action_label}[/dim]\n[bold {action_color}]{action_val}[/bold {action_color}]",
+        f"[dim]Skipped / Failed[/dim]\n[bold white]{skipped} skip / {failed} fail[/bold white]",
+        f"[dim]Throughput / Speed[/dim]\n[bold cyan]{throughput} files/s[/bold cyan]",
+    )
+
+    border_color = "yellow" if is_dry_run else "green"
+    card = Panel(
+        stats_grid,
+        title=f"[bold {border_color}]{title}[/bold {border_color}]",
+        border_style=border_color,
+        padding=(1, 2),
+    )
+    CONSOLE.print()
+    CONSOLE.print(card)
+    CONSOLE.print()
 
 
 @app.command
@@ -61,7 +107,7 @@ def sync(
         Path | None,
         Parameter(
             name=["--json", "-j"],
-            help="Save structured report to a JSON file.",
+            help="Save structured report to a JSON or JSONL file.",
         ),
     ] = None,
     sync_audio: Annotated[
@@ -99,6 +145,13 @@ def sync(
             help="Save subtitle with language suffix for Plex/Emby (e.g. movie.ro.srt).",
         ),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        Parameter(
+            name=["--dry-run", "-d"],
+            help="Simulate search and matching without downloading or altering files.",
+        ),
+    ] = False,
     verbose: Annotated[
         bool,
         Parameter(
@@ -122,20 +175,31 @@ def sync(
             json_path=json_report,
             sync_engine=engine,
             use_lang_suffix=lang_suffix,
+            dry_run=dry_run,
         )
 
         results = report.get("results", [])
-        if len(results) == 1 and results[0].get("status") in ("success", "skipped"):
+        total_files = report.get("total_files", len(results))
+        duration = float(report.get("duration_seconds", 0.0))
+        throughput = float(report.get("throughput_files_per_sec", 0.0))
+
+        if len(results) == 1 and results[0].get("status") in ("success", "skipped", "dry_run"):
             res = results[0]
             sub = res.get("subtitle", {})
             sync_data = res.get("sync", {})
-            is_skipped = res.get("status") == "skipped"
+            st = res.get("status")
 
-            title_color = "yellow" if is_skipped else "green"
-            title_text = (
-                "✓ Subtitle Already Present" if is_skipped else "✓ Subtitle Download Complete"
-            )
-            table = Table(title=f"[bold {title_color}]{title_text}[/bold {title_color}]")
+            if st == "dry_run":
+                title = "⚡ Dry-Run Simulation (No Files Modified)"
+                color = "yellow"
+            elif st == "skipped":
+                title = "✓ Subtitle Already Present"
+                color = "yellow"
+            else:
+                title = "✓ Subtitle Download Complete"
+                color = "green"
+
+            table = Table(title=f"[bold {color}]{title}[/bold {color}]")
             table.add_column("Property", style="cyan", no_wrap=True)
             table.add_column("Value", style="white")
 
@@ -145,13 +209,13 @@ def sync(
             table.add_row("Selected Provider", sub.get("provider", "").upper())
             table.add_row(
                 "Match Strategy",
-                "Existing File"
-                if is_skipped
+                "Existing Local File"
+                if st == "skipped"
                 else ("Exact HASH Match" if sub.get("matched_by_hash") else "Relevance Score"),
             )
             table.add_row("Subtitle Release", sub.get("release_name", ""))
             table.add_row("Language", sub.get("language", "").upper())
-            table.add_row("Saved SRT File", sub.get("saved_path", ""))
+            table.add_row("Target SRT Path", sub.get("saved_path", ""))
 
             if sync_data.get("success"):
                 offset_val = sync_data.get("offset_seconds")
@@ -162,11 +226,31 @@ def sync(
                 table.add_row("Audio Sync", f"[dim]{msg}[/dim]")
 
             CONSOLE.print(table)
-            CONSOLE.print(f"\n[bold green]✓ Ready for playback:[/] {sub.get('saved_path')}\n")
+            if st != "dry_run":
+                CONSOLE.print(f"\n[bold green]✓ Ready for playback:[/] {sub.get('saved_path')}\n")
+            else:
+                CONSOLE.print(
+                    f"\n[bold yellow]⚡ Simulated target path:[/] {sub.get('saved_path')}\n"
+                )
         else:
-            table = Table(title="[bold green]✓ Batch Synchronization Summary[/bold green]")
-            table.add_column("Video File", style="white")
+            dashboard_title = (
+                "⚡ CineSub Dry-Run Simulation" if dry_run else "✓ CineSub Synchronization Summary"
+            )
+            _render_stats_card(
+                title=dashboard_title,
+                total=total_files,
+                success=report.get("successful", 0),
+                skipped=report.get("skipped", 0),
+                dry_run=report.get("dry_run_count", 0),
+                failed=report.get("failed", 0),
+                duration=duration,
+                throughput=throughput,
+                is_dry_run=dry_run,
+            )
+
+            table = Table(title="[bold]Detailed Results Breakdown[/bold]")
             table.add_column("Status", justify="center")
+            table.add_column("Video File", style="white")
             table.add_column("Provider", style="cyan")
             table.add_column("Details", style="green")
 
@@ -178,33 +262,38 @@ def sync(
                     offset_val = sync_data.get("offset_seconds")
                     offset_str = f"{offset_val:+.2f}s" if offset_val is not None else "OK"
                     table.add_row(
+                        "[bold green]SUCCESS[/bold green]",
                         r.get("video_file"),
-                        "[green]SUCCESS[/green]",
                         sub.get("provider", "").upper(),
                         offset_str,
+                    )
+                elif st == "dry_run":
+                    sub = r.get("subtitle", {})
+                    score_val = f"Score: {sub.get('score', 0):.1f}"
+                    table.add_row(
+                        "[bold yellow]DRY-RUN[/bold yellow]",
+                        r.get("video_file"),
+                        sub.get("provider", "").upper(),
+                        score_val,
                     )
                 elif st == "skipped":
                     sub = r.get("subtitle", {})
                     table.add_row(
+                        "[bold dim]SKIPPED[/bold dim]",
                         r.get("video_file"),
-                        "[yellow]SKIPPED[/yellow]",
                         "LOCAL",
                         f"Exists: {sub.get('release_name', 'SRT')}",
                     )
                 else:
                     table.add_row(
+                        "[bold red]FAILED[/bold red]",
                         r.get("video_file"),
-                        "[red]FAILED[/red]",
                         "-",
-                        r.get("error", "Error")[:30],
+                        r.get("error", "Error")[:35],
                     )
 
             CONSOLE.print(table)
-            CONSOLE.print(
-                f"\n[bold green]✓ Completed:[/] {report['successful']} downloaded, "
-                f"{report.get('skipped', 0)} skipped, {report['failed']} failed "
-                f"(Total: {report['total_files']})\n"
-            )
+            CONSOLE.print()
 
         return report
 
@@ -255,7 +344,7 @@ def bulk(
         Path | None,
         Parameter(
             name=["--json", "-j"],
-            help="Save structured report to a JSON file.",
+            help="Save structured report to a JSON or JSONL file.",
         ),
     ] = None,
     force: Annotated[
@@ -263,6 +352,13 @@ def bulk(
         Parameter(
             name=["--force", "-f"],
             help="Overwrite existing files.",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        Parameter(
+            name=["--dry-run", "-d"],
+            help="Simulate search and matching without downloading files.",
         ),
     ] = False,
     verbose: Annotated[
@@ -285,13 +381,19 @@ def bulk(
             force=force,
             threads=threads,
             json_path=json_report,
+            dry_run=dry_run,
         )
 
         results = report.get("results", [])
-        if len(results) == 1 and results[0].get("status") == "success":
+        total_files = report.get("total_files", len(results))
+        duration = float(report.get("duration_seconds", 0.0))
+        throughput = float(report.get("throughput_files_per_sec", 0.0))
+
+        if len(results) == 1 and results[0].get("status") in ("success", "dry_run"):
             subs = results[0].get("subtitles", [])
+            title_prefix = "⚡ Dry-Run Simulated" if dry_run else "✓ Downloaded"
             table = Table(
-                title=f"[bold green]✓ Downloaded {len(subs)} Subtitle Alternatives[/bold green]"
+                title=f"[bold green]{title_prefix} {len(subs)} Subtitle Alternatives[/bold green]"
             )
             table.add_column("#", style="dim", justify="right")
             table.add_column("Provider", style="cyan")
@@ -312,25 +414,43 @@ def bulk(
 
             CONSOLE.print(table)
             saved_loc = path.parent if path.is_file() else path
-            CONSOLE.print(f"\n[bold green]✓ Files saved in:[/] {saved_loc}\n")
+            if not dry_run:
+                CONSOLE.print(f"\n[bold green]✓ Files saved in:[/] {saved_loc}\n")
+            else:
+                CONSOLE.print(f"\n[bold yellow]⚡ Simulated directory:[/] {saved_loc}\n")
         else:
-            table = Table(title="[bold green]✓ Batch Bulk Download Summary[/bold green]")
-            table.add_column("Video File", style="white")
+            dashboard_title = "⚡ CineSub Bulk Dry-Run" if dry_run else "✓ CineSub Bulk Summary"
+            _render_stats_card(
+                title=dashboard_title,
+                total=total_files,
+                success=report.get("successful", 0),
+                skipped=0,
+                dry_run=report.get("dry_run_count", 0),
+                failed=report.get("failed", 0),
+                duration=duration,
+                throughput=throughput,
+                is_dry_run=dry_run,
+            )
+
+            table = Table(title="[bold]Detailed Results Breakdown[/bold]")
             table.add_column("Status", justify="center")
-            table.add_column("Subtitles Downloaded", justify="right", style="cyan")
+            table.add_column("Video File", style="white")
+            table.add_column("Subtitles Found", justify="right", style="cyan")
 
             for r in results:
-                if r.get("status") == "success":
+                if r.get("status") in ("success", "dry_run"):
                     count_str = str(len(r.get("subtitles", [])))
-                    table.add_row(r.get("video_file"), "[green]SUCCESS[/green]", count_str)
+                    status_str = (
+                        "[bold yellow]DRY-RUN[/bold yellow]"
+                        if dry_run
+                        else "[bold green]SUCCESS[/bold green]"
+                    )
+                    table.add_row(status_str, r.get("video_file"), count_str)
                 else:
-                    table.add_row(r.get("video_file"), "[red]FAILED[/red]", "0")
+                    table.add_row("[bold red]FAILED[/bold red]", r.get("video_file"), "0")
 
             CONSOLE.print(table)
-            CONSOLE.print(
-                f"\n[bold green]✓ Completed:[/] {report['successful']} successful, "
-                f"{report['failed']} failed (Total: {report['total_files']})\n"
-            )
+            CONSOLE.print()
 
         return report
 

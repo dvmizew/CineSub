@@ -68,20 +68,289 @@ def decode_and_normalize_subtitle_content(raw_bytes: bytes) -> bytes:
     return text.encode("utf-8")
 
 
-_GROUP_ALIASES: dict[str, frozenset[str]] = {
-    "yts": frozenset({"yts", "yts.mx", "yts.lt", "yts.am", "yts.ag", "yify"}),
-    "yts.mx": frozenset({"yts", "yts.mx", "yts.lt", "yts.am", "yts.ag", "yify"}),
-    "yts.lt": frozenset({"yts", "yts.mx", "yts.lt", "yts.am", "yts.ag", "yify"}),
-    "yts.am": frozenset({"yts", "yts.mx", "yts.lt", "yts.am", "yts.ag", "yify"}),
-    "yts.ag": frozenset({"yts", "yts.mx", "yts.lt", "yts.am", "yts.ag", "yify"}),
-    "yify": frozenset({"yts", "yts.mx", "yts.lt", "yts.am", "yts.ag", "yify"}),
-    "qxr": frozenset({"qxr", "utr", "tigole", "silence", "vyndros", "judas"}),
-    "galaxyrg": frozenset({"galaxyrg", "tgx"}),
-    "tgx": frozenset({"galaxyrg", "tgx"}),
-    "flux": frozenset({"flux", "cmrg", "ntb"}),
-    "cmrg": frozenset({"flux", "cmrg", "ntb"}),
-    "ntb": frozenset({"flux", "cmrg", "ntb"}),
-}
+_GROUP_CLUSTERS: list[frozenset[str]] = [
+    # YTS / YIFY ecosystem
+    frozenset(
+        {
+            "yts",
+            "yts.mx",
+            "yts.lt",
+            "yts.am",
+            "yts.ag",
+            "yts.gg",
+            "yts.bz",
+            "yts.vc",
+            "yts.to",
+            "yts.pm",
+            "yify",
+            "yify-torrents",
+        }
+    ),
+    # QxR / UTR / Tigole ecosystem (x265 high-efficiency BluRay encodes)
+    frozenset(
+        {
+            "qxr",
+            "tigole",
+            "utr",
+            "rcvr",
+            "judas",
+            "rzero",
+            "ghost",
+            "silence",
+            "vyndros",
+            "samwise",
+            "trom",
+            "monkee",
+        }
+    ),
+    # High-tier P2P WEB-DL groups
+    frozenset(
+        {
+            "ntb",
+            "flux",
+            "cmrg",
+            "kings",
+            "lazy",
+            "tepes",
+            "smurf",
+            "nosivid",
+            "eclipse",
+            "playweb",
+            "glhf",
+            "whoknows",
+            "b2b",
+            "ggwp",
+            "alfa",
+            "monolith",
+            "cakes",
+            "tbs",
+        }
+    ),
+    # Compact / micro-encoders
+    frozenset(
+        {
+            "psa",
+            "psarips",
+            "galaxyrg",
+            "tgx",
+            "galaxytv",
+            "pahe",
+            "minihd",
+            "mkvcage",
+            "bone",
+            "rmteam",
+            "subzer0",
+            "dense",
+            "nep",
+            "fgt",
+        }
+    ),
+    # Scene giants (HD/BluRay/WEB/TV)
+    frozenset(
+        {
+            "sparks",
+            "rovers",
+            "drones",
+            "geckos",
+            "amiable",
+            "shortbrehd",
+            "blow",
+            "depraved",
+            "mayhem",
+            "vethd",
+            "sinners",
+            "lost",
+            "chd",
+            "publichd",
+            "dimension",
+            "lol",
+            "fleet",
+            "immerse",
+            "killers",
+            "batv",
+            "fqm",
+            "river",
+            "deflate",
+            "rubix",
+            "tla",
+            "saints",
+            "demand",
+            "strife",
+            "fum",
+            "organic",
+            "swag",
+            "mind",
+            "jyk",
+        }
+    ),
+    # Top-tier Remux / Encode groups (PTP, HDB, BeyondHD, AHD)
+    frozenset(
+        {
+            "framestor",
+            "ctrlhd",
+            "don",
+            "d-z0n3",
+            "ift",
+            "w4nk3r",
+            "epsilon",
+            "hdchina",
+            "hds",
+            "hdwing",
+            "chdbits",
+            "ttg",
+            "wiki",
+            "ebp",
+            "decibel",
+            "ptp",
+            "hdb",
+            "beyondhd",
+            "frazer",
+            "termitermx",
+            "kralimarko",
+            "crapht",
+            "fluxremux",
+            "blurole",
+        }
+    ),
+    # General scene / repackers / web-rip
+    frozenset(
+        {
+            "evo",
+            "evolution",
+            "rarbg",
+            "vxt",
+            "etrg",
+            "axxo",
+            "klaxxon",
+            "juggs",
+            "proper",
+            "repack",
+            "real",
+        }
+    ),
+    # Anime release groups & subbers
+    frozenset(
+        {
+            "erai-raws",
+            "subsplease",
+            "horriblesubs",
+            "commie",
+            "asenshi",
+            "coalgirls",
+            "scy",
+            "doki",
+            "mezashite",
+            "fff",
+            "kametsu",
+            "mtbb",
+            "reinforce",
+            "neikos",
+            "ember",
+            "smokey",
+            "beetle",
+            "vivid",
+            "chyu",
+        }
+    ),
+    # Automated / Micro WEB & TV Encoders
+    frozenset(
+        {
+            "megusta",
+            "surcode",
+            "pignus",
+            "tekno",
+            "stuttershit",
+            "edith",
+            "tommy",
+            "bipolar",
+            "kimchi",
+            "flame",
+            "xebec",
+            "codie",
+            "trump",
+            "bored",
+            "asurada",
+            "trivi4",
+            "fused",
+            "theonlyh3r0",
+            "minx",
+            "afg",
+            "mkvking",
+            "rm4k",
+            "rartv",
+            "rapidcow",
+            "scenetime",
+            "topaz",
+            "yol0",
+        }
+    ),
+    # Asian Trackers & Encoders (Chinese / Korean / Japanese)
+    frozenset(
+        {
+            "mteam",
+            "frds",
+            "beast",
+            "cmct",
+            "chdbits",
+            "pter",
+            "ourbits",
+            "hdsky",
+            "lemon",
+            "cine21",
+            "appletor",
+            "noma",
+            "limo",
+            "next",
+            "hevc-dada",
+            "totheglory",
+            "ttg",
+        }
+    ),
+    # Romanian & Eastern European Trackers (FileList, SuperBits, SpeedApp, Rutracker)
+    frozenset(
+        {
+            "playhd",
+            "rosub",
+            "flshare",
+            "speed",
+            "superbits",
+            "hdclub",
+            "rutracker",
+            "lostfilm",
+            "newstudio",
+            "hdrezka",
+            "alexfilm",
+            "baibako",
+            "kuraj",
+        }
+    ),
+    # European / Multi-language Scene & Encoders (French / German / Spanish / Italian)
+    frozenset(
+        {
+            "vostfr",
+            "multi",
+            "jmt",
+            "zt",
+            "extreme",
+            "titans",
+            "waf",
+            "tft",
+            "fhd",
+            "hdt",
+            "cinexvid",
+            "cine-hd",
+            "hdlight",
+            "popcon",
+            "hd-area",
+            "tscc",
+        }
+    ),
+]
+
+_GROUP_ALIASES: dict[str, frozenset[str]] = {}
+for _cluster in _GROUP_CLUSTERS:
+    for _member in _cluster:
+        _GROUP_ALIASES[_member] = _cluster
 
 
 def parse_video_metadata(video_path: str | Path, compute_hash: bool = True) -> VideoMetadata:
@@ -136,6 +405,9 @@ def parse_video_metadata(video_path: str | Path, compute_hash: bool = True) -> V
         episode = None
 
     is_episode = guess.get("type") == "episode" or (season is not None and episode is not None)
+
+    if year and title.lower().endswith(str(year)):
+        title = title[: -len(str(year))].strip(" -._")
 
     part = guess.get("part")
     if part and not is_episode:
@@ -197,9 +469,15 @@ def score_subtitle_candidate(
     rel_lower = release_name.lower()
 
     if video_meta.release_group:
-        v_grp = video_meta.release_group.lower()
-        aliases = _GROUP_ALIASES.get(v_grp, frozenset({v_grp}))
-        if any(alias in rel_lower for alias in aliases):
+        v_grp = video_meta.release_group.lower().strip()
+        aliases: frozenset[str] | None = _GROUP_ALIASES.get(v_grp)
+        if aliases is None:
+            for member, cluster in _GROUP_ALIASES.items():
+                if member in v_grp:
+                    aliases = cluster
+                    break
+
+        if aliases and any(alias in rel_lower for alias in aliases):
             score += SCORE_RELEASE_GROUP_WEIGHT
         else:
             grp_ratio = fuzz.partial_ratio(v_grp, rel_lower)
