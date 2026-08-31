@@ -405,3 +405,239 @@ def test_multilingual_and_special_character_subtitles() -> None:
     assert "♫ Le cœur d’Amélie" in decoded_euro
     assert "¡Olé!" in decoded_euro
     assert "«100%»…" in decoded_euro
+
+
+def test_popular_and_cult_tv_series(tmp_path: Path) -> None:
+    cases = [
+        {
+            "filename": "Game.of.Thrones.S08E06.1080p.WEB-DL.DDP5.1.Atmos.H.264-CMRG.mkv",
+            "expected_title": "Game of Thrones",
+            "expected_season": 8,
+            "expected_episode": 6,
+            "expected_group": "CMRG",
+            "is_episode": True,
+        },
+        {
+            "filename": (
+                "House.of.the.Dragon.S02E01.2160p.MAX.WEB-DL.DDP5.1.Atmos.DoVi.H.265-FLUX.mkv"
+            ),
+            "expected_title": "House of the Dragon",
+            "expected_season": 2,
+            "expected_episode": 1,
+            "expected_group": "FLUX",
+            "is_episode": True,
+        },
+        {
+            "filename": "The.Sopranos.S01E01.1080p.BluRay.x264-ROVERS.mkv",
+            "expected_title": "The Sopranos",
+            "expected_season": 1,
+            "expected_episode": 1,
+            "expected_group": "ROVERS",
+            "is_episode": True,
+        },
+        {
+            "filename": "The.Wire.S04E01.1080p.BluRay.x264-CtrlHD.mkv",
+            "expected_title": "The Wire",
+            "expected_season": 4,
+            "expected_episode": 1,
+            "expected_group": "CtrlHD",
+            "is_episode": True,
+        },
+        {
+            "filename": "Stranger.Things.S04E09.1080p.NF.WEB-DL.DDP5.1.Atmos.x264-FLUX.mkv",
+            "expected_title": "Stranger Things",
+            "expected_season": 4,
+            "expected_episode": 9,
+            "expected_group": "FLUX",
+            "is_episode": True,
+        },
+        {
+            "filename": "Severance.S01E01.1080p.ATVP.WEB-DL.DDP5.1.Atmos.H.264-FLUX.mkv",
+            "expected_title": "Severance",
+            "expected_season": 1,
+            "expected_episode": 1,
+            "expected_group": "FLUX",
+            "is_episode": True,
+        },
+        {
+            "filename": "Succession.S04E03.1080p.MAX.WEB-DL.DDP5.1.H.264-FLUX.mkv",
+            "expected_title": "Succession",
+            "expected_season": 4,
+            "expected_episode": 3,
+            "expected_group": "FLUX",
+            "is_episode": True,
+        },
+        {
+            "filename": "Chernobyl.S01E01.1080p.BluRay.x264-ROVERS.mkv",
+            "expected_title": "Chernobyl",
+            "expected_season": 1,
+            "expected_episode": 1,
+            "expected_group": "ROVERS",
+            "is_episode": True,
+        },
+        {
+            "filename": "Better.Call.Saul.S06E07.1080p.WEB.H264-CAKES.mkv",
+            "expected_title": "Better Call Saul",
+            "expected_season": 6,
+            "expected_episode": 7,
+            "expected_group": "CAKES",
+            "is_episode": True,
+        },
+        {
+            "filename": "Twin.Peaks.S03E08.1080p.AMZN.WEBRip.DDP5.1.x264-NTb.mkv",
+            "expected_title": "Twin Peaks",
+            "expected_season": 3,
+            "expected_episode": 8,
+            "expected_group": "NTb",
+            "is_episode": True,
+        },
+        {
+            "filename": "Riget.S01E01.DANISH.1080p.BluRay.x264-EA.mkv",
+            "expected_title": "Riget",
+            "expected_season": 1,
+            "expected_episode": 1,
+            "expected_group": "EA",
+            "is_episode": True,
+        },
+        {
+            "filename": "Dekalog.S01E01.POLISH.1080p.BluRay.x264-EA.mkv",
+            "expected_title": "Dekalog",
+            "expected_season": 1,
+            "expected_episode": 1,
+            "expected_group": "EA",
+            "is_episode": True,
+        },
+        {
+            "filename": "Berlin.Alexanderplatz.E01.GERMAN.1080p.BluRay.x264-EA.mkv",
+            "expected_title": "Berlin Alexanderplatz",
+            "expected_episode": 1,
+            "expected_group": "EA",
+            "is_episode": True,
+        },
+        {
+            "filename": "Umbre.S02E01.ROMANIAN.1080p.HBO.WEB-DL.AAC2.0.H.264-ROSub.mkv",
+            "expected_title": "Umbre",
+            "expected_season": 2,
+            "expected_episode": 1,
+            "expected_group": "ROSub",
+            "is_episode": True,
+        },
+        {
+            "filename": "Dark.S01E01.GERMAN.1080p.NF.WEB-DL.DDP5.1.x264-NTb.mkv",
+            "expected_title": "Dark",
+            "expected_season": 1,
+            "expected_episode": 1,
+            "expected_group": "NTb",
+            "is_episode": True,
+        },
+        {
+            "filename": "Babylon.Berlin.S01E01.GERMAN.1080p.BluRay.x264-CiNEFiLE.mkv",
+            "expected_title": "Babylon Berlin",
+            "expected_season": 1,
+            "expected_episode": 1,
+            "expected_group": "CiNEFiLE",
+            "is_episode": True,
+        },
+        {
+            "filename": "Gomorra.S01E01.ITALIAN.1080p.BluRay.x264-CiNEFiLE.mkv",
+            "expected_title": "Gomorra",
+            "expected_season": 1,
+            "expected_episode": 1,
+            "expected_group": "CiNEFiLE",
+            "is_episode": True,
+        },
+        {
+            "filename": "Bron.Broen.S01E01.SWEDISH.1080p.BluRay.x264-CiNEFiLE.mkv",
+            "expected_title": "Bron Broen",
+            "expected_season": 1,
+            "expected_episode": 1,
+            "expected_group": "CiNEFiLE",
+            "is_episode": True,
+        },
+        {
+            "filename": "Neon.Genesis.Evangelion.S01E01.1080p.BluRay.x264-Sephiroth.mkv",
+            "expected_title": "Neon Genesis Evangelion",
+            "expected_season": 1,
+            "expected_episode": 1,
+            "expected_group": "Sephiroth",
+            "is_episode": True,
+        },
+        {
+            "filename": "Attack.on.Titan.S03E01.1080p.BluRay.x264-DameDesuYo.mkv",
+            "expected_title": "Attack on Titan",
+            "expected_season": 3,
+            "expected_episode": 1,
+            "expected_group": "DameDesuYo",
+            "is_episode": True,
+        },
+        {
+            "filename": "Monster.E01.Herr.Dr.Tenma.1080p.BluRay.x264-Coalgirls.mkv",
+            "expected_title": "Monster",
+            "expected_episode": 1,
+            "expected_group": "Coalgirls",
+            "is_episode": True,
+        },
+    ]
+
+    for c in cases:
+        filename = str(c["filename"])
+        file_p = tmp_path / filename
+        file_p.write_bytes(b"\x00" * 131072)
+        meta = parse_video_metadata(file_p, compute_hash=True)
+
+        assert str(c["expected_title"]).lower() in meta.title.lower()
+        if "expected_season" in c:
+            assert meta.season == c["expected_season"]
+        if "expected_episode" in c:
+            assert meta.episode == c["expected_episode"]
+        if "expected_group" in c:
+            assert meta.release_group == c["expected_group"]
+        assert meta.is_episode == c["is_episode"]
+        assert meta.moviehash is not None
+
+
+def test_yts_and_1337x_release_group_matching(tmp_path: Path) -> None:
+    yts_file = tmp_path / "Dune.Part.Two.2024.1080p.WEBRip.x264-[YTS.MX].mp4"
+    yts_file.write_bytes(b"\x00" * 131072)
+    yts_meta = parse_video_metadata(yts_file, compute_hash=True)
+
+    assert "dune part 2" in yts_meta.title.lower()
+    assert yts_meta.year == 2024
+    assert yts_meta.release_group == "YTS.MX"
+
+    score_yify = score_subtitle_candidate(
+        yts_meta, "Dune.Part.Two.2024.1080p.WEBRip.x264-YIFY", matched_by_hash=False
+    )
+    score_yts = score_subtitle_candidate(
+        yts_meta, "Dune.Part.Two.2024.1080p.WEBRip.x264-[YTS.AM]", matched_by_hash=False
+    )
+    score_random = score_subtitle_candidate(
+        yts_meta, "Dune.Part.Two.2024.720p.HDTV.x264-UNKNOWN", matched_by_hash=False
+    )
+
+    assert score_yify > score_random
+    assert score_yts > score_random
+    assert score_yify == score_yts
+
+    qxr_file = tmp_path / "Interstellar.2014.IMAX.1080p.BluRay.x265.10bit-QxR.mkv"
+    qxr_file.write_bytes(b"\x00" * 131072)
+    qxr_meta = parse_video_metadata(qxr_file, compute_hash=True)
+
+    score_tigole = score_subtitle_candidate(
+        qxr_meta, "Interstellar.2014.1080p.BluRay.x265-Tigole", matched_by_hash=False
+    )
+    assert score_tigole > score_random
+
+
+def test_multipart_movies_title_enrichment(tmp_path: Path) -> None:
+    cases = [
+        ("Harry.Potter.And.The.Deathly.Hallows.Part.1.2010.1080p.mp4", "Part 1"),
+        ("Gangs.of.Wasseypur.Part.1.2012.HINDI.1080p.mkv", "Part 1"),
+        ("Rebel.Moon.Part.Two.2024.1080p.WEB.mkv", "Part 2"),
+    ]
+
+    for filename, expected_part in cases:
+        p = tmp_path / filename
+        p.write_bytes(b"\x00" * 131072)
+        meta = parse_video_metadata(p, compute_hash=False)
+        assert expected_part.lower() in meta.title.lower()

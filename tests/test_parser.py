@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from cinesub.core.utils import (
     decode_and_normalize_subtitle_content,
     normalize_language,
@@ -52,6 +54,9 @@ def test_decode_and_normalize_subtitle_content() -> None:
 
     assert decode_and_normalize_subtitle_content(b"") == b""
 
+    with pytest.raises(ValueError, match="too large"):
+        decode_and_normalize_subtitle_content(b"A" * (11 * 1024 * 1024))
+
 
 def test_parse_movie_filename(sample_video_file: Path) -> None:
     meta = parse_video_metadata(sample_video_file)
@@ -81,3 +86,52 @@ def test_score_subtitle_candidate(sample_video_meta) -> None:
     match_score = score_subtitle_candidate(sample_video_meta, "Inception.1080p.BluRay.SPARKS")
     mismatch_score = score_subtitle_candidate(sample_video_meta, "Inception.720p.HDTV.DIMENSION")
     assert match_score > mismatch_score
+
+
+def test_find_video_files_nas_pruning(tmp_path: Path) -> None:
+    from cinesub.core.utils import find_video_files
+
+    movie = tmp_path / "Movies" / "Inception (2010)" / "Inception.2010.1080p.mkv"
+    movie.parent.mkdir(parents=True, exist_ok=True)
+    movie.write_bytes(b"\x00" * 1024)
+
+    syno_junk = (
+        tmp_path
+        / "Movies"
+        / "@eaDir"
+        / "Inception (2010)"
+        / "Inception.2010.1080p.mkv@SynoEAStream"
+    )
+    syno_junk.parent.mkdir(parents=True, exist_ok=True)
+    syno_junk.write_bytes(b"\x00" * 512)
+
+    plex_junk = tmp_path / "Movies" / ".plex" / "thumb.mkv"
+    plex_junk.parent.mkdir(parents=True, exist_ok=True)
+    plex_junk.write_bytes(b"\x00" * 512)
+
+    recycle_junk = tmp_path / "Movies" / "#recycle" / "deleted.mp4"
+    recycle_junk.parent.mkdir(parents=True, exist_ok=True)
+    recycle_junk.write_bytes(b"\x00" * 512)
+
+    featurette = tmp_path / "Movies" / "Inception (2010)" / "Featurettes" / "behind_scenes.mp4"
+    featurette.parent.mkdir(parents=True, exist_ok=True)
+    featurette.write_bytes(b"\x00" * 512)
+
+    found = find_video_files(tmp_path)
+    assert len(found) == 1
+    assert found[0] == movie
+
+
+def test_has_existing_subtitle(tmp_path: Path) -> None:
+    from cinesub.core.utils import has_existing_subtitle
+
+    video = tmp_path / "Dune.Part.Two.2024.mkv"
+    video.write_bytes(b"\x00" * 1024)
+
+    assert has_existing_subtitle(video, "ro") is None
+
+    ro_sub = tmp_path / "Dune.Part.Two.2024.ro.srt"
+    ro_sub.write_text("1\n00:00:01,000 --> 00:00:04,000\nTest\n")
+
+    res = has_existing_subtitle(video, "ro")
+    assert res == ro_sub

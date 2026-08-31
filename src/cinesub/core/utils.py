@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from guessit import guessit
 from rapidfuzz import fuzz
 
 from cinesub.core.constants import (
+    IGNORED_DIRS,
     SCORE_BASE,
     SCORE_CODEC_MATCH,
     SCORE_HASH_MATCH_BASE,
@@ -19,6 +21,7 @@ from cinesub.core.constants import (
     SCORE_RELEASE_GROUP_WEIGHT,
     SCORE_RESOLUTION_MATCH,
     SCORE_SOURCE_MATCH,
+    SUBTITLE_EXTENSIONS,
     SUPPORTED_VIDEO_EXTS,
 )
 from cinesub.core.hasher import calculate_movie_hash
@@ -43,6 +46,8 @@ def decode_and_normalize_subtitle_content(raw_bytes: bytes) -> bytes:
     """Decode raw subtitle bytes and re-encode as clean, normalized UTF-8 SRT."""
     if not raw_bytes:
         return b""
+    if len(raw_bytes) > 10 * 1024 * 1024:
+        raise ValueError(f"Subtitle payload too large ({len(raw_bytes)} bytes, maximum 10MB).")
 
     try:
         text = raw_bytes.decode("utf-8-sig")
@@ -61,6 +66,22 @@ def decode_and_normalize_subtitle_content(raw_bytes: bytes) -> bytes:
         LOG.debug(f"Non-standard SRT structure, keeping decoded text: {exc}")
 
     return text.encode("utf-8")
+
+
+_GROUP_ALIASES: dict[str, frozenset[str]] = {
+    "yts": frozenset({"yts", "yts.mx", "yts.lt", "yts.am", "yts.ag", "yify"}),
+    "yts.mx": frozenset({"yts", "yts.mx", "yts.lt", "yts.am", "yts.ag", "yify"}),
+    "yts.lt": frozenset({"yts", "yts.mx", "yts.lt", "yts.am", "yts.ag", "yify"}),
+    "yts.am": frozenset({"yts", "yts.mx", "yts.lt", "yts.am", "yts.ag", "yify"}),
+    "yts.ag": frozenset({"yts", "yts.mx", "yts.lt", "yts.am", "yts.ag", "yify"}),
+    "yify": frozenset({"yts", "yts.mx", "yts.lt", "yts.am", "yts.ag", "yify"}),
+    "qxr": frozenset({"qxr", "utr", "tigole", "silence", "vyndros", "judas"}),
+    "galaxyrg": frozenset({"galaxyrg", "tgx"}),
+    "tgx": frozenset({"galaxyrg", "tgx"}),
+    "flux": frozenset({"flux", "cmrg", "ntb"}),
+    "cmrg": frozenset({"flux", "cmrg", "ntb"}),
+    "ntb": frozenset({"flux", "cmrg", "ntb"}),
+}
 
 
 def parse_video_metadata(video_path: str | Path, compute_hash: bool = True) -> VideoMetadata:
@@ -116,6 +137,12 @@ def parse_video_metadata(video_path: str | Path, compute_hash: bool = True) -> V
 
     is_episode = guess.get("type") == "episode" or (season is not None and episode is not None)
 
+    part = guess.get("part")
+    if part and not is_episode:
+        part_str = str(part)
+        if f"part {part_str}" not in title.lower() and f"part.{part_str}" not in title.lower():
+            title = f"{title} Part {part_str}"
+
     release_group = guess.get("release_group")
     if isinstance(release_group, list):
         release_group = str(release_group[0])
@@ -170,9 +197,14 @@ def score_subtitle_candidate(
     rel_lower = release_name.lower()
 
     if video_meta.release_group:
-        grp_ratio = fuzz.partial_ratio(video_meta.release_group.lower(), rel_lower)
-        if grp_ratio >= SCORE_RELEASE_GROUP_THRESHOLD:
-            score += SCORE_RELEASE_GROUP_WEIGHT * (grp_ratio / 100.0)
+        v_grp = video_meta.release_group.lower()
+        aliases = _GROUP_ALIASES.get(v_grp, frozenset({v_grp}))
+        if any(alias in rel_lower for alias in aliases):
+            score += SCORE_RELEASE_GROUP_WEIGHT
+        else:
+            grp_ratio = fuzz.partial_ratio(v_grp, rel_lower)
+            if grp_ratio >= SCORE_RELEASE_GROUP_THRESHOLD:
+                score += SCORE_RELEASE_GROUP_WEIGHT * (grp_ratio / 100.0)
 
     if video_meta.screen_size and video_meta.screen_size.lower() in rel_lower:
         score += SCORE_RESOLUTION_MATCH
@@ -187,15 +219,52 @@ def score_subtitle_candidate(
     return score
 
 
-def find_video_files(path: str | Path) -> list[Path]:
-    """Discover video files from a file path or directory recursively.
+def has_existing_subtitle(video_path: str | Path, language: str | None = None) -> Path | None:
+    p = Path(video_path).resolve()
+    parent = p.parent
+    stem = p.stem
 
-    Args:
-        path: Path to a single video file or directory.
+    candidates: list[Path] = [
+        parent / f"{stem}.srt",
+        parent / f"{stem}.default.srt",
+        parent / f"{stem}.sdh.srt",
+        parent / f"{stem}.forced.srt",
+    ]
+    if language:
+        lang_clean = normalize_language(language)
+        candidates.extend(
+            [
+                parent / f"{stem}.{lang_clean}.srt",
+                parent / f"{stem}.{lang_clean}.sdh.srt",
+                parent / f"{stem}.{lang_clean}.forced.srt",
+                parent / f"{stem}.{lang_clean}.default.srt",
+            ]
+        )
+        try:
+            lang_3b = str(Language.fromalpha2(lang_clean).alpha3b)
+            candidates.extend(
+                [
+                    parent / f"{stem}.{lang_3b}.srt",
+                    parent / f"{stem}.{lang_3b}.sdh.srt",
+                    parent / f"{stem}.{lang_3b}.forced.srt",
+                ]
+            )
+        except (ValueError, LookupError, AttributeError, BabelfishError):
+            pass
 
-    Returns:
-        Sorted list of matching Path objects.
-    """
+    for cand in candidates:
+        if cand.is_file() and cand.stat().st_size > 0:
+            return cand
+
+    for sub_ext in SUBTITLE_EXTENSIONS:
+        ext_p = parent / f"{stem}{sub_ext}"
+        if ext_p.is_file() and ext_p.stat().st_size > 0:
+            return ext_p
+
+    return None
+
+
+def find_video_files(path: str | Path, min_size: int = 0) -> list[Path]:
     p = Path(path).resolve()
     if not p.exists():
         raise FileNotFoundError(f"Path does not exist: {p}")
@@ -204,10 +273,23 @@ def find_video_files(path: str | Path) -> list[Path]:
         return [p]
 
     video_files: list[Path] = []
-    for item in p.rglob("*"):
-        if item.is_file() and not item.name.startswith("."):
-            if item.suffix.lower() in SUPPORTED_VIDEO_EXTS:
-                video_files.append(item)
+    str_path = str(p)
+
+    for root, dirs, files in os.walk(str_path, topdown=True):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d.lower() not in IGNORED_DIRS]
+
+        for fname in files:
+            if fname.startswith("."):
+                continue
+            _, ext = os.path.splitext(fname)
+            if ext.lower() in SUPPORTED_VIDEO_EXTS:
+                full_path = Path(root) / fname
+                try:
+                    if min_size > 0 and full_path.stat().st_size < min_size:
+                        continue
+                except OSError:
+                    continue
+                video_files.append(full_path)
 
     video_files.sort(key=lambda x: str(x).lower())
     return video_files

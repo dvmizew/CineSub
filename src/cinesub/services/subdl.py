@@ -154,8 +154,8 @@ class SubdlService:
         content = resp.content
         destination.parent.mkdir(parents=True, exist_ok=True)
 
-        if content.startswith(ZIP_MAGIC_BYTES) or zipfile.is_zipfile(io.BytesIO(content)):
-            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+        if content.startswith(ZIP_MAGIC_BYTES):
+            with io.BytesIO(content) as buf, zipfile.ZipFile(buf) as zf:
                 srt_files = [n for n in zf.namelist() if n.lower().endswith(".srt")]
                 if not srt_files:
                     all_subs = [
@@ -174,5 +174,7 @@ class SubdlService:
             raw_bytes = content
 
         clean_bytes = decode_and_normalize_subtitle_content(raw_bytes)
-        destination.write_bytes(clean_bytes)
+        temp_dest = destination.parent / f".{destination.name}.tmp"
+        temp_dest.write_bytes(clean_bytes)
+        os.replace(temp_dest, destination)
         return destination

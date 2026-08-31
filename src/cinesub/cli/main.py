@@ -92,6 +92,13 @@ def sync(
             help="Overwrite existing subtitle files without warning.",
         ),
     ] = False,
+    lang_suffix: Annotated[
+        bool,
+        Parameter(
+            name=["--lang-suffix", "-S"],
+            help="Save subtitle with language suffix for Plex/Emby (e.g. movie.ro.srt).",
+        ),
+    ] = False,
     verbose: Annotated[
         bool,
         Parameter(
@@ -114,15 +121,21 @@ def sync(
             threads=threads,
             json_path=json_report,
             sync_engine=engine,
+            use_lang_suffix=lang_suffix,
         )
 
         results = report.get("results", [])
-        if len(results) == 1 and results[0].get("status") == "success":
+        if len(results) == 1 and results[0].get("status") in ("success", "skipped"):
             res = results[0]
             sub = res.get("subtitle", {})
             sync_data = res.get("sync", {})
+            is_skipped = res.get("status") == "skipped"
 
-            table = Table(title="[bold green]✓ Subtitle Download Complete[/bold green]")
+            title_color = "yellow" if is_skipped else "green"
+            title_text = (
+                "✓ Subtitle Already Present" if is_skipped else "✓ Subtitle Download Complete"
+            )
+            table = Table(title=f"[bold {title_color}]{title_text}[/bold {title_color}]")
             table.add_column("Property", style="cyan", no_wrap=True)
             table.add_column("Value", style="white")
 
@@ -132,7 +145,9 @@ def sync(
             table.add_row("Selected Provider", sub.get("provider", "").upper())
             table.add_row(
                 "Match Strategy",
-                "Exact HASH Match" if sub.get("matched_by_hash") else "Relevance Score",
+                "Existing File"
+                if is_skipped
+                else ("Exact HASH Match" if sub.get("matched_by_hash") else "Relevance Score"),
             )
             table.add_row("Subtitle Release", sub.get("release_name", ""))
             table.add_row("Language", sub.get("language", "").upper())
@@ -143,7 +158,8 @@ def sync(
                 offset_str = f"{offset_val:+.3f}s" if offset_val is not None else "Aligned"
                 table.add_row("Audio Sync", f"[bold green]Active ({offset_str})[/bold green]")
             else:
-                table.add_row("Audio Sync", "[dim]Disabled (Use --sync / -s to align)[/dim]")
+                msg = sync_data.get("message", "Disabled")
+                table.add_row("Audio Sync", f"[dim]{msg}[/dim]")
 
             CONSOLE.print(table)
             CONSOLE.print(f"\n[bold green]✓ Ready for playback:[/] {sub.get('saved_path')}\n")
@@ -152,10 +168,11 @@ def sync(
             table.add_column("Video File", style="white")
             table.add_column("Status", justify="center")
             table.add_column("Provider", style="cyan")
-            table.add_column("Offset", style="green")
+            table.add_column("Details", style="green")
 
             for r in results:
-                if r.get("status") == "success":
+                st = r.get("status")
+                if st == "success":
                     sub = r.get("subtitle", {})
                     sync_data = r.get("sync", {})
                     offset_val = sync_data.get("offset_seconds")
@@ -165,6 +182,14 @@ def sync(
                         "[green]SUCCESS[/green]",
                         sub.get("provider", "").upper(),
                         offset_str,
+                    )
+                elif st == "skipped":
+                    sub = r.get("subtitle", {})
+                    table.add_row(
+                        r.get("video_file"),
+                        "[yellow]SKIPPED[/yellow]",
+                        "LOCAL",
+                        f"Exists: {sub.get('release_name', 'SRT')}",
                     )
                 else:
                     table.add_row(
@@ -176,8 +201,9 @@ def sync(
 
             CONSOLE.print(table)
             CONSOLE.print(
-                f"\n[bold green]✓ Completed:[/] {report['successful']} successful, "
-                f"{report['failed']} failed (Total: {report['total_files']})\n"
+                f"\n[bold green]✓ Completed:[/] {report['successful']} downloaded, "
+                f"{report.get('skipped', 0)} skipped, {report['failed']} failed "
+                f"(Total: {report['total_files']})\n"
             )
 
         return report

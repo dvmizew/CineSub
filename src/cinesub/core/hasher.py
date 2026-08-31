@@ -6,9 +6,8 @@ from pathlib import Path
 
 from cinesub.core.constants import HASH_CHUNK_SIZE, MIN_HASH_FILE_SIZE
 
-_INT64_STRUCT = struct.Struct("<q")
-_BYTESIZE = _INT64_STRUCT.size
-_NUM_CHUNKS = HASH_CHUNK_SIZE // _BYTESIZE
+_CHUNKS_COUNT = HASH_CHUNK_SIZE // 8
+_CHUNKS_STRUCT = struct.Struct(f"<{_CHUNKS_COUNT}q")
 _MASK_64 = 0xFFFFFFFFFFFFFFFF
 
 
@@ -24,22 +23,10 @@ def calculate_movie_hash(file_path: str | Path) -> str:
             f"(minimum {MIN_HASH_FILE_SIZE} bytes)."
         )
 
-    hash_val = file_size
-
     with open(path, "rb") as f:
-        for _ in range(_NUM_CHUNKS):
-            chunk = f.read(_BYTESIZE)
-            if len(chunk) < _BYTESIZE:
-                break
-            (val,) = _INT64_STRUCT.unpack(chunk)
-            hash_val = (hash_val + val) & _MASK_64
-
+        head = f.read(HASH_CHUNK_SIZE)
         f.seek(max(0, file_size - HASH_CHUNK_SIZE), os.SEEK_SET)
-        for _ in range(_NUM_CHUNKS):
-            chunk = f.read(_BYTESIZE)
-            if len(chunk) < _BYTESIZE:
-                break
-            (val,) = _INT64_STRUCT.unpack(chunk)
-            hash_val = (hash_val + val) & _MASK_64
+        tail = f.read(HASH_CHUNK_SIZE)
 
-    return f"{hash_val:016x}"
+    hash_val = file_size + sum(_CHUNKS_STRUCT.unpack(head)) + sum(_CHUNKS_STRUCT.unpack(tail))
+    return f"{hash_val & _MASK_64:016x}"

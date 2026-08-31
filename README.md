@@ -130,10 +130,11 @@ cinesub sync "/path/to/movies" -l ro -t 4 --json sync_report.json
 | `-p, --provider` | `all` | Search provider: `all`, `opensubtitles`, or `subdl` |
 | `-s, --sync` | `False` | Align subtitle timestamps against video audio |
 | `-e, --engine` | `ffsubsync` | Synchronization engine: `ffsubsync` (Python/FFmpeg) or `alass` (Rust) |
+| `-S, --lang-suffix` | `False` | Save subtitle with language tag for Plex/Emby (e.g. `movie.ro.srt`) |
 | `-b, --backup` | `False` | Save unsynchronized original as `<name>.orig.srt` |
 | `-t, --threads` | `4` | Number of concurrent worker threads for batch processing |
 | `-j, --json` | `None` | Save structured report to a JSON file |
-| `-f, --force` | `False` | Overwrite existing subtitle files |
+| `-f, --force` | `False` | Overwrite existing subtitle files (default: skips existing subtitles) |
 | `--verbose` | `False` | Enable debug logging |
 
 ---
@@ -195,6 +196,10 @@ cinesub config
 - **Hash Algorithm**: Uses OpenSubtitles' 64-bit checksum over the first and last 64 KB of the file added to the total file size.
 - **HTTP Client**: Uses `httpx` with persistent connection pooling, HTTP/2 support, and retry handlers.
 - **JSON Engine**: `orjson` is used for fast serialization and deserialization.
+- **NAS & Plex Library Optimizations**:
+  - Prunes non-media and thumbnail directory trees (`@eaDir`, `#recycle`, `.plex`, `Featurettes`, `Trailers`) during traversal for instant scans on large NFS/SMB shares.
+  - Automatically skips media with existing valid subtitles (unless `-f, --force` is passed) for efficient incremental cron executions.
+  - Supports Plex/Emby language suffix convention (`-S, --lang-suffix`, e.g. `movie.ro.srt`).
 - **Archive Extraction**: SubDL `.zip` packages are unpacked in-memory using `io.BytesIO` and `zipfile.ZipFile`.
 
 ---

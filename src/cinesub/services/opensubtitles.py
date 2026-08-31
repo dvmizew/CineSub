@@ -207,5 +207,7 @@ class OpenSubtitlesService:
         clean_bytes = decode_and_normalize_subtitle_content(content)
 
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(clean_bytes)
+        temp_dest = destination.parent / f".{destination.name}.tmp"
+        temp_dest.write_bytes(clean_bytes)
+        os.replace(temp_dest, destination)
         return destination

@@ -10,7 +10,12 @@ import orjson
 from cinesub.core.constants import DEFAULT_LANGUAGE
 from cinesub.core.logger import LOG, create_progress
 from cinesub.core.models import SubtitleMatch, SyncResult, VideoMetadata
-from cinesub.core.utils import find_video_files, normalize_language, parse_video_metadata
+from cinesub.core.utils import (
+    find_video_files,
+    has_existing_subtitle,
+    normalize_language,
+    parse_video_metadata,
+)
 from cinesub.modules.syncer import sync_subtitle_audio
 from cinesub.services.opensubtitles import OpenSubtitlesService
 from cinesub.services.subdl import SubdlService
@@ -42,17 +47,27 @@ def download_and_sync(
     keep_backup: bool = False,
     force: bool = False,
     sync_engine: str = "ffsubsync",
-) -> tuple[VideoMetadata, SubtitleMatch, SyncResult | None, Path]:
+    use_lang_suffix: bool = False,
+) -> tuple[VideoMetadata, SubtitleMatch | None, SyncResult | None, Path]:
     """Search, download best subtitle match, and optionally perform audio synchronization."""
     path = Path(video_path).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Video file not found: {path}")
 
     target_lang = normalize_language(language or DEFAULT_LANGUAGE)
-    target_srt = path.parent / f"{path.stem}.srt"
+    existing_sub = has_existing_subtitle(path, target_lang)
 
-    if target_srt.exists() and not force:
-        LOG.warning(f"File {target_srt.name} already exists. Overwriting with matching subtitle.")
+    if existing_sub and not force:
+        LOG.info(
+            f"Skipping {path.name} (subtitle already exists: [white]{existing_sub.name}[/white])"
+        )
+        video_meta = parse_video_metadata(path, compute_hash=False)
+        return video_meta, None, None, existing_sub
+
+    if use_lang_suffix:
+        target_srt = path.parent / f"{path.stem}.{target_lang}.srt"
+    else:
+        target_srt = path.parent / f"{path.stem}.srt"
 
     LOG.info(f"Analyzing media file: [white]{path.name}[/white]")
     video_meta = parse_video_metadata(path, compute_hash=True)
@@ -65,26 +80,19 @@ def download_and_sync(
         )
 
     all_matches: list[SubtitleMatch] = []
-    hash_matches: list[SubtitleMatch] = []
-
     for name, svc in services.items():
         LOG.info(f"Querying {name.upper()} API for [{target_lang.upper()}] subtitles...")
-        results = svc.search(video_meta, language=target_lang)
-        for match in results:
-            if match.matched_by_hash:
-                hash_matches.append(match)
-            all_matches.append(match)
+        all_matches.extend(svc.search(video_meta, language=target_lang))
 
     if not all_matches:
         raise ValueError(f"No [{target_lang.upper()}] subtitles found for '{video_meta.title}'.")
 
-    if hash_matches:
-        hash_matches.sort(key=lambda m: m.score, reverse=True)
-        best_match = hash_matches[0]
+    all_matches.sort(key=lambda m: m.score, reverse=True)
+    best_match = all_matches[0]
+
+    if best_match.matched_by_hash:
         LOG.success(f"Matched by exact Video Hash via {best_match.provider.upper()}")
     else:
-        all_matches.sort(key=lambda m: m.score, reverse=True)
-        best_match = all_matches[0]
         LOG.info(
             f"Selected best candidate via {best_match.provider.upper()}: {best_match.release_name}"
         )
@@ -108,7 +116,11 @@ def download_and_sync(
 
 
 def _format_sync_item_report(
-    meta: VideoMetadata, match: SubtitleMatch, sync_res: SyncResult | None, srt_p: Path
+    meta: VideoMetadata,
+    match: SubtitleMatch | None,
+    sync_res: SyncResult | None,
+    srt_p: Path,
+    status: str = "success",
 ) -> dict[str, Any]:
     return {
         "video_file": meta.file_path.name,
@@ -118,21 +130,27 @@ def _format_sync_item_report(
         "is_episode": meta.is_episode,
         "moviehash": meta.moviehash,
         "subtitle": {
-            "id": match.id,
-            "provider": match.provider,
-            "language": match.language,
-            "release_name": match.release_name,
-            "matched_by_hash": match.matched_by_hash,
-            "score": match.score,
+            "id": match.id if match else "existing",
+            "provider": match.provider if match else "local",
+            "language": match.language if match else "local",
+            "release_name": match.release_name if match else srt_p.name,
+            "matched_by_hash": match.matched_by_hash if match else False,
+            "score": match.score if match else 100.0,
             "saved_path": str(srt_p),
         },
         "sync": {
             "success": sync_res.success if sync_res else None,
             "offset_seconds": sync_res.offset_seconds if sync_res else None,
             "framerate_scale": sync_res.framerate_scale if sync_res else None,
-            "message": sync_res.message if sync_res else "Skipped (Disabled)",
+            "message": (
+                sync_res.message
+                if sync_res
+                else (
+                    "Skipped (Existing Subtitle)" if status == "skipped" else "Skipped (Disabled)"
+                )
+            ),
         },
-        "status": "success",
+        "status": status,
     }
 
 
@@ -146,6 +164,7 @@ def download_and_sync_batch(
     threads: int = 4,
     json_path: Path | None = None,
     sync_engine: str = "ffsubsync",
+    use_lang_suffix: bool = False,
 ) -> dict[str, Any]:
     """Batch search and download subtitles across multiple files with multithreading."""
     video_files = find_video_files(target_path)
@@ -154,6 +173,7 @@ def download_and_sync_batch(
 
     report_items: list[dict[str, Any]] = []
     successful_count = 0
+    skipped_count = 0
     failed_count = 0
 
     def _worker(v_path: Path) -> dict[str, Any]:
@@ -166,8 +186,10 @@ def download_and_sync_batch(
                 keep_backup=keep_backup,
                 force=force,
                 sync_engine=sync_engine,
+                use_lang_suffix=use_lang_suffix,
             )
-            return _format_sync_item_report(meta, match, sync_res, srt_p)
+            item_status = "skipped" if match is None else "success"
+            return _format_sync_item_report(meta, match, sync_res, srt_p, status=item_status)
         except Exception as exc:
             LOG.error(f"Failed processing {v_path.name}: {exc}")
             return {
@@ -178,46 +200,49 @@ def download_and_sync_batch(
             }
 
     if len(video_files) == 1:
-        # Single file execution
         item_report = _worker(video_files[0])
         report_items.append(item_report)
-        if item_report.get("status") == "success":
+        st = item_report.get("status")
+        if st == "success":
             successful_count += 1
+        elif st == "skipped":
+            skipped_count += 1
         else:
             failed_count += 1
     else:
-        # Batch multithreaded execution
         LOG.info(
             f"Found {len(video_files)} video files. "
             f"Processing with [bold cyan]{threads}[/bold cyan] threads..."
         )
 
         progress = create_progress()
-        with progress:
+        with progress, ThreadPoolExecutor(max_workers=min(threads, len(video_files))) as executor:
             task = progress.add_task("[cyan]Processing subtitles...", total=len(video_files))
-            executor = ThreadPoolExecutor(max_workers=min(threads, len(video_files)))
             try:
                 future_map = {executor.submit(_worker, vf): vf for vf in video_files}
                 for future in as_completed(future_map):
                     item_report = future.result()
                     report_items.append(item_report)
-                    if item_report.get("status") == "success":
+                    st = item_report.get("status")
+                    if st == "success":
                         successful_count += 1
+                    elif st == "skipped":
+                        skipped_count += 1
                     else:
                         failed_count += 1
                     progress.advance(task)
+                    future_map.pop(future, None)
             except KeyboardInterrupt:
                 LOG.warning("\nBatch execution interrupted by user. Stopping worker threads...")
                 executor.shutdown(wait=False, cancel_futures=True)
                 raise
-            finally:
-                executor.shutdown(wait=True)
 
     report = {
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "command": "sync",
         "total_files": len(video_files),
         "successful": successful_count,
+        "skipped": skipped_count,
         "failed": failed_count,
         "results": report_items,
     }
@@ -372,9 +397,8 @@ def download_bulk_batch(
         )
 
         progress = create_progress()
-        with progress:
+        with progress, ThreadPoolExecutor(max_workers=min(threads, len(video_files))) as executor:
             task = progress.add_task("[cyan]Bulk downloading...", total=len(video_files))
-            executor = ThreadPoolExecutor(max_workers=min(threads, len(video_files)))
             try:
                 future_map = {executor.submit(_worker, vf): vf for vf in video_files}
                 for future in as_completed(future_map):
@@ -385,12 +409,11 @@ def download_bulk_batch(
                     else:
                         failed_count += 1
                     progress.advance(task)
+                    future_map.pop(future, None)
             except KeyboardInterrupt:
                 LOG.warning("\nBatch execution interrupted by user. Stopping worker threads...")
                 executor.shutdown(wait=False, cancel_futures=True)
                 raise
-            finally:
-                executor.shutdown(wait=True)
 
     report = {
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),

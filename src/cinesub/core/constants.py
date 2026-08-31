@@ -34,7 +34,36 @@ SUPPORTED_VIDEO_EXTS = frozenset(
     }
 )
 
+IGNORED_DIRS = frozenset(
+    {
+        "@eadir",
+        "#recycle",
+        ".recycle",
+        ".trash",
+        ".trash-1000",
+        ".plex",
+        ".git",
+        ".venv",
+        ".idea",
+        ".vscode",
+        "lost+found",
+        "node_modules",
+        "extras",
+        "featurettes",
+        "trailers",
+        "behind the scenes",
+        "deleted scenes",
+        "shorts",
+        "interviews",
+        "scenes",
+        "samples",
+        "subs",
+        "subtitles",
+    }
+)
+
 SUBTITLE_EXTENSIONS = (".srt", ".vtt", ".sub", ".ass")
+MIN_VIDEO_SCAN_SIZE = 10 * 1024 * 1024
 
 GZIP_MAGIC_BYTES = b"\x1f\x8b"
 ZIP_MAGIC_BYTES = b"PK\x03\x04"
