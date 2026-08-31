@@ -1,5 +1,3 @@
-"""Main subtitle searching, downloading, batch coordination, and report generation."""
-
 from __future__ import annotations
 
 import datetime
@@ -43,6 +41,7 @@ def download_and_sync(
     do_sync: bool = False,
     keep_backup: bool = False,
     force: bool = False,
+    sync_engine: str = "ffsubsync",
 ) -> tuple[VideoMetadata, SubtitleMatch, SyncResult | None, Path]:
     """Search, download best subtitle match, and optionally perform audio synchronization."""
     path = Path(video_path).resolve()
@@ -96,11 +95,12 @@ def download_and_sync(
 
     sync_result: SyncResult | None = None
     if do_sync:
-        LOG.info("Synchronizing subtitle against video audio track with ffsubsync...")
+        LOG.info(f"Synchronizing subtitle against video audio track with {sync_engine}...")
         sync_result = sync_subtitle_audio(
             video_path=path,
             srt_path=target_srt,
             keep_backup=keep_backup,
+            engine=sync_engine,
         )
         LOG.success(sync_result.message)
 
@@ -145,6 +145,7 @@ def download_and_sync_batch(
     force: bool = False,
     threads: int = 4,
     json_path: Path | None = None,
+    sync_engine: str = "ffsubsync",
 ) -> dict[str, Any]:
     """Batch search and download subtitles across multiple files with multithreading."""
     video_files = find_video_files(target_path)
@@ -164,6 +165,7 @@ def download_and_sync_batch(
                 do_sync=do_sync,
                 keep_backup=keep_backup,
                 force=force,
+                sync_engine=sync_engine,
             )
             return _format_sync_item_report(meta, match, sync_res, srt_p)
         except Exception as exc:
@@ -256,7 +258,6 @@ def download_bulk(
     if not candidates:
         raise ValueError(f"No [{target_lang.upper()}] subtitles found for '{video_meta.title}'.")
 
-    # Deduplicate and sort by relevance score
     candidates.sort(key=lambda m: m.score, reverse=True)
     selected: list[SubtitleMatch] = []
     seen_releases: set[str] = set()

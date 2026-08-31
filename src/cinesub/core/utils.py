@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import srt
 from babelfish import Error as BabelfishError
 from babelfish import Language
+from charset_normalizer import from_bytes
 from guessit import guessit
 from rapidfuzz import fuzz
 
@@ -17,7 +19,6 @@ from cinesub.core.constants import (
     SCORE_RELEASE_GROUP_WEIGHT,
     SCORE_RESOLUTION_MATCH,
     SCORE_SOURCE_MATCH,
-    SUBTITLE_ENCODINGS,
     SUPPORTED_VIDEO_EXTS,
 )
 from cinesub.core.hasher import calculate_movie_hash
@@ -39,21 +40,27 @@ def normalize_language(lang: str) -> str:
 
 
 def decode_and_normalize_subtitle_content(raw_bytes: bytes) -> bytes:
-    """Decode raw subtitle bytes from various encodings and re-encode as clean UTF-8.
-
-    Handles UTF-8 with/without BOM, CP1250, CP1252, ISO-8859-16, ISO-8859-2, ISO-8859-1.
-    """
+    """Decode raw subtitle bytes and re-encode as clean, normalized UTF-8 SRT."""
     if not raw_bytes:
         return b""
 
-    for encoding in SUBTITLE_ENCODINGS:
-        try:
-            decoded_text = raw_bytes.decode(encoding)
-            return decoded_text.encode("utf-8")
-        except UnicodeDecodeError:
-            continue
+    try:
+        text = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        match = from_bytes(raw_bytes).best()
+        text = str(match) if match is not None else raw_bytes.decode("utf-8", errors="replace")
 
-    return raw_bytes.decode("utf-8", errors="replace").encode("utf-8")
+    if text.startswith("\ufeff"):
+        text = text[1:]
+
+    try:
+        subtitles = list(srt.parse(text))
+        if subtitles:
+            text = srt.compose(subtitles, reindex=True)
+    except srt.SRTParseError as exc:
+        LOG.debug(f"Non-standard SRT structure, keeping decoded text: {exc}")
+
+    return text.encode("utf-8")
 
 
 def parse_video_metadata(video_path: str | Path, compute_hash: bool = True) -> VideoMetadata:

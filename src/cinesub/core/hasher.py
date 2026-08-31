@@ -13,18 +13,6 @@ _MASK_64 = 0xFFFFFFFFFFFFFFFF
 
 
 def calculate_movie_hash(file_path: str | Path) -> str:
-    """Calculate the 64-bit OpenSubtitles hash for a video file.
-
-    Args:
-        file_path: Path to the target video file.
-
-    Returns:
-        16-character lowercase hexadecimal hash string.
-
-    Raises:
-        FileNotFoundError: If the file does not exist.
-        ValueError: If the file is smaller than 128KB.
-    """
     path = Path(file_path)
     if not path.is_file():
         raise FileNotFoundError(f"Video file not found: {path}")
@@ -39,7 +27,6 @@ def calculate_movie_hash(file_path: str | Path) -> str:
     hash_val = file_size
 
     with open(path, "rb") as f:
-        # First 64KB
         for _ in range(_NUM_CHUNKS):
             chunk = f.read(_BYTESIZE)
             if len(chunk) < _BYTESIZE:
@@ -47,7 +34,6 @@ def calculate_movie_hash(file_path: str | Path) -> str:
             (val,) = _INT64_STRUCT.unpack(chunk)
             hash_val = (hash_val + val) & _MASK_64
 
-        # Last 64KB
         f.seek(max(0, file_size - HASH_CHUNK_SIZE), os.SEEK_SET)
         for _ in range(_NUM_CHUNKS):
             chunk = f.read(_BYTESIZE)

@@ -13,7 +13,6 @@ from cinesub.core.utils import (
 
 
 def test_normalize_language() -> None:
-    """Test ISO 639-1 language code normalization."""
     assert normalize_language("ro") == "ro"
     assert normalize_language("rum") == "ro"
     assert normalize_language("romanian") == "ro"
@@ -25,14 +24,17 @@ def test_normalize_language() -> None:
 
 
 def test_decode_and_normalize_subtitle_content() -> None:
-    """Test encoding normalization across UTF-8 BOM, CP1250, and UTF-8."""
-    # 1. UTF-8 with BOM
-    bom_data = b"\xef\xbb\xbf1\n00:00:01,000 --> 00:00:04,000\nSalut lume!\n"
+    bom_data = (
+        b"\xef\xbb\xbf5\n00:00:01,000 --> 00:00:04,000\nSalut lume!\n\n"
+        b"9\n00:00:05,000 --> 00:00:08,000\nA doua linie\n"
+    )
     normalized = decode_and_normalize_subtitle_content(bom_data)
     assert not normalized.startswith(b"\xef\xbb\xbf")
-    assert "Salut lume!" in normalized.decode("utf-8")
+    decoded_str = normalized.decode("utf-8")
+    assert "Salut lume!" in decoded_str
+    assert "1\n00:00:01,000 --> 00:00:04,000" in decoded_str
+    assert "2\n00:00:05,000 --> 00:00:08,000" in decoded_str
 
-    # 2. Legacy CP1250 (Romanian diacritics: ş, ţ, ă, î, â)
     text_ro = (
         "1\n00:00:01,000 --> 00:00:04,000\nAcesta este un text cu diacritice: ş, ţ, ă, î, â.\n"
     )
@@ -40,12 +42,18 @@ def test_decode_and_normalize_subtitle_content() -> None:
     normalized_cp1250 = decode_and_normalize_subtitle_content(cp1250_data)
     assert "diacritice" in normalized_cp1250.decode("utf-8")
 
-    # 3. Empty input
+    text_cyrillic = (
+        "1\n00:00:01,000 --> 00:00:04,000\nПривет, это тестовая субтитра для фильма.\n\n"
+        "2\n00:00:05,000 --> 00:00:08,000\nВторая строка с русским текстом.\n"
+    )
+    cp1251_data = text_cyrillic.encode("cp1251")
+    normalized_cyrillic = decode_and_normalize_subtitle_content(cp1251_data)
+    assert "Привет, это тестовая субтитра" in normalized_cyrillic.decode("utf-8")
+
     assert decode_and_normalize_subtitle_content(b"") == b""
 
 
 def test_parse_movie_filename(sample_video_file: Path) -> None:
-    """Test parsing movie metadata."""
     meta = parse_video_metadata(sample_video_file)
     assert meta.title.lower() == "inception"
     assert meta.year == 2010
@@ -57,7 +65,6 @@ def test_parse_movie_filename(sample_video_file: Path) -> None:
 
 
 def test_parse_episode_filename(sample_episode_file: Path) -> None:
-    """Test parsing TV episode metadata."""
     meta = parse_video_metadata(sample_episode_file)
     assert "breaking bad" in meta.title.lower()
     assert meta.season == 1
@@ -68,12 +75,9 @@ def test_parse_episode_filename(sample_episode_file: Path) -> None:
 
 
 def test_score_subtitle_candidate(sample_video_meta) -> None:
-    """Test scoring logic with rapidfuzz."""
-    # Hash match gets >= 100
     hash_score = score_subtitle_candidate(sample_video_meta, "Any.Name", matched_by_hash=True)
     assert hash_score >= 100.0
 
-    # Matching release group gets higher score than non-matching
     match_score = score_subtitle_candidate(sample_video_meta, "Inception.1080p.BluRay.SPARKS")
     mismatch_score = score_subtitle_candidate(sample_video_meta, "Inception.720p.HDTV.DIMENSION")
     assert match_score > mismatch_score

@@ -78,6 +78,13 @@ def sync(
             help="Keep original unsynchronized subtitle copy (*.orig.srt).",
         ),
     ] = False,
+    engine: Annotated[
+        str,
+        Parameter(
+            name=["--engine", "-e"],
+            help="Audio synchronization engine: 'ffsubsync' or 'alass'.",
+        ),
+    ] = "ffsubsync",
     force: Annotated[
         bool,
         Parameter(
@@ -106,6 +113,7 @@ def sync(
             force=force,
             threads=threads,
             json_path=json_report,
+            sync_engine=engine,
         )
 
         results = report.get("results", [])
@@ -346,9 +354,17 @@ def config() -> None:
     ffmpeg_status = (
         "[green]Installed & Found in PATH[/green]"
         if ffmpeg_ok
-        else "[bold red]Not Found in PATH (Required for audio sync)[/bold red]"
+        else "[yellow]Not Found (Required for ffsubsync)[/yellow]"
     )
-    table.add_row("FFmpeg Binary", ffmpeg_status)
+    table.add_row("FFmpeg (ffsubsync)", ffmpeg_status)
+
+    alass_bin = shutil.which("alass") or shutil.which("alass-cli")
+    alass_status = (
+        "[green]Installed & Found in PATH[/green]"
+        if alass_bin
+        else "[dim]Optional (Rust binary not in PATH)[/dim]"
+    )
+    table.add_row("Alass Engine", alass_status)
 
     CONSOLE.print(table)
     CONSOLE.print()

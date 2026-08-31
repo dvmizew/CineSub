@@ -35,6 +35,8 @@ dependencies = [
     "babelfish>=0.6.0",
     "rapidfuzz>=3.0.0",
     "python-dotenv>=1.0.0",
+    "charset-normalizer>=3.3.0",
+    "srt>=3.5.3",
 ]
 
 [project.optional-dependencies]
@@ -65,6 +67,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 ignore_missing_imports = true

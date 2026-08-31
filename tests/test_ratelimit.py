@@ -15,7 +15,7 @@ def test_rate_limiter_acquire() -> None:
     for _ in range(5):
         limiter.acquire()
     elapsed = time.monotonic() - start
-    assert elapsed < 0.1  # Burst should be instantaneous
+    assert elapsed < 0.1
 
 
 def test_rate_limiter_cooldown() -> None:

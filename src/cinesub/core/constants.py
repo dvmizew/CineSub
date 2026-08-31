@@ -36,25 +36,12 @@ SUPPORTED_VIDEO_EXTS = frozenset(
 
 SUBTITLE_EXTENSIONS = (".srt", ".vtt", ".sub", ".ass")
 
-SUBTITLE_ENCODINGS: tuple[str, ...] = (
-    "utf-8-sig",
-    "utf-8",
-    "cp1250",
-    "cp1252",
-    "iso-8859-16",
-    "iso-8859-2",
-    "iso-8859-1",
-)
-
-# Magic bytes for archive detection
 GZIP_MAGIC_BYTES = b"\x1f\x8b"
 ZIP_MAGIC_BYTES = b"PK\x03\x04"
 
-# 64KB chunk size for OpenSubtitles 64-bit checksum calculation
 HASH_CHUNK_SIZE = 65536
 MIN_HASH_FILE_SIZE = HASH_CHUNK_SIZE * 2
 
-# Heuristic scoring weights
 SCORE_HASH_MATCH_BASE = 100.0
 SCORE_BASE = 10.0
 SCORE_RELEASE_GROUP_WEIGHT = 40.0

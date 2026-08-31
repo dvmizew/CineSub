@@ -59,12 +59,18 @@ pip install -e .
 
 ---
 
-## Configuration
+## Configuration & API Credentials
 
-CineSub reads API keys from a `.env` file in your working directory or home path.
+CineSub integrates with two major subtitle provider APIs. You can obtain free API keys from:
+
+| Provider | API Endpoint | Documentation & API Key Registration | Rate Limit |
+| :--- | :--- | :--- | :--- |
+| **OpenSubtitles.com** | `https://api.opensubtitles.com/api/v1` | [OpenSubtitles API Portal](https://www.opensubtitles.com/consumers) | 4.0 req/s (Client Cap) / 5 req/s max |
+| **SubDL** | `https://api.subdl.com/api/v1` | [SubDL API Portal](https://subdl.com/api) | 8.0 req/s (600 req/min Cap) |
+
+Create a `.env` file in your working directory or home directory:
 
 ```bash
-# Create your .env file
 cp .env.example .env
 ```
 
@@ -122,7 +128,8 @@ cinesub sync "/path/to/movies" -l ro -t 4 --json sync_report.json
 | `PATH` | *required* | Path to a video file or a directory containing video files |
 | `-l, --language` | `en` | Subtitle language (ISO 639-1 code, e.g. `ro`, `en`, `es`) |
 | `-p, --provider` | `all` | Search provider: `all`, `opensubtitles`, or `subdl` |
-| `-s, --sync` | `False` | Align subtitle timestamps against video audio with `ffsubsync` |
+| `-s, --sync` | `False` | Align subtitle timestamps against video audio |
+| `-e, --engine` | `ffsubsync` | Synchronization engine: `ffsubsync` (Python/FFmpeg) or `alass` (Rust) |
 | `-b, --backup` | `False` | Save unsynchronized original as `<name>.orig.srt` |
 | `-t, --threads` | `4` | Number of concurrent worker threads for batch processing |
 | `-j, --json` | `None` | Save structured report to a JSON file |
@@ -176,7 +183,12 @@ cinesub config
 
 ## Technical Details & Rate Limiting
 
-- **Rate Limits Enforced**:
+- **Subtitle Sanitization & Encoding**:
+  - Automatically normalizes character encoding to clean UTF-8 (without BOM) using `charset-normalizer`, correctly decoding CP1250, CP1251, ISO-8859, and Asian charsets.
+  - Validates and re-indexes subtitle sequence numbers and timestamp formatting with `srt`.
+- **Audio Alignment Engines**:
+  - Supports **`ffsubsync`** (VAD cross-correlation) and **`alass`** (Dynamic Programming).
+- **Rate Limits**:
   - **OpenSubtitles.com**: Official API limit is 5 req/s. CineSub enforces a safe client-side rate limit of **4.0 req/s**.
   - **SubDL.com**: Official API limit is 600 req/min (10 req/s). CineSub enforces **8.0 req/s**.
   - **HTTP 429 Handling**: Token-bucket rate limiters automatically pause all concurrent threads and back off according to `Retry-After` response headers.

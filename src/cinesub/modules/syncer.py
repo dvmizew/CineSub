@@ -16,46 +16,56 @@ def sync_subtitle_audio(
     output_path: Path | str | None = None,
     keep_backup: bool = False,
     max_offset_seconds: int = 600,
+    engine: str = "ffsubsync",
 ) -> SyncResult:
-    """Synchronize subtitle timestamps against video audio stream using ffsubsync."""
+    """Synchronize subtitle timestamps against video audio stream using ffsubsync or alass."""
     video_p = Path(video_path).resolve()
     srt_p = Path(srt_path).resolve()
     target_out = Path(output_path).resolve() if output_path else srt_p
+    chosen_engine = engine.lower().strip()
 
     if not video_p.is_file():
         raise FileNotFoundError(f"Video file not found: {video_p}")
     if not srt_p.is_file():
         raise FileNotFoundError(f"Subtitle file not found: {srt_p}")
-    if not shutil.which("ffmpeg"):
-        raise RuntimeError("ffmpeg not found in PATH. ffmpeg is required by ffsubsync.")
 
     with tempfile.NamedTemporaryFile(
         dir=srt_p.parent, prefix=f".{srt_p.stem}_sync_", suffix=".srt", delete=False
     ) as tmp_file:
         temp_out = Path(tmp_file.name)
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "ffsubsync",
-        str(video_p),
-        "-i",
-        str(srt_p),
-        "-o",
-        str(temp_out),
-        "--max-offset-seconds",
-        str(max_offset_seconds),
-        "--overwrite-input",
-    ]
+    if chosen_engine == "alass":
+        alass_bin = shutil.which("alass") or shutil.which("alass-cli")
+        if not alass_bin:
+            raise RuntimeError(
+                "alass binary not found in PATH. Install alass or use engine='ffsubsync'."
+            )
+        cmd = [alass_bin, str(video_p), str(srt_p), str(temp_out)]
+    else:
+        if not shutil.which("ffmpeg"):
+            raise RuntimeError("ffmpeg not found in PATH. ffmpeg is required by ffsubsync.")
+        cmd = [
+            sys.executable,
+            "-m",
+            "ffsubsync",
+            str(video_p),
+            "-i",
+            str(srt_p),
+            "-o",
+            str(temp_out),
+            "--max-offset-seconds",
+            str(max_offset_seconds),
+            "--overwrite-input",
+        ]
 
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if res.returncode != 0:
             err_msg = res.stderr.strip() or res.stdout.strip() or "Unknown error"
-            raise RuntimeError(f"ffsubsync failed: {err_msg}")
+            raise RuntimeError(f"Sync engine '{chosen_engine}' failed: {err_msg}")
 
         if not temp_out.is_file() or temp_out.stat().st_size == 0:
-            raise RuntimeError("ffsubsync failed to generate a synchronized subtitle file.")
+            raise RuntimeError(f"{chosen_engine} failed to generate a synchronized subtitle file.")
 
         output_text = f"{res.stdout}\n{res.stderr}"
         offset: float | None = None
@@ -87,7 +97,7 @@ def sync_subtitle_audio(
         shutil.move(str(temp_out), str(target_out))
 
         offset_desc = f"{offset:+.3f}s" if offset is not None else "Aligned"
-        msg = f"Audio sync complete (offset: {offset_desc})"
+        msg = f"Audio sync complete via {chosen_engine} (offset: {offset_desc})"
 
         return SyncResult(
             success=True,
