@@ -51,7 +51,7 @@ class RateLimiter:
 
 
 # OpenSubtitles: Official limit is 5 req/sec (login is 1 req/sec). Safe client rate: 4.0 req/sec.
-OPENSUBTITLES_LIMITER = RateLimiter(rate=4.0, max_burst=4.0)
+OPENSUBTITLES_LIMITER = RateLimiter(rate=4.0, max_burst=1.0)
 
 # SubDL: Official limit is 600 req/min (10 req/sec). Safe client rate: 8.0 req/sec.
-SUBDL_LIMITER = RateLimiter(rate=8.0, max_burst=8.0)
+SUBDL_LIMITER = RateLimiter(rate=8.0, max_burst=2.0)

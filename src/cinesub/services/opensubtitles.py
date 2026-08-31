@@ -64,6 +64,12 @@ class OpenSubtitlesService:
                     OPENSUBTITLES_LIMITER.trigger_cooldown(wait_sec)
                     continue
 
+                remaining_hdr = resp.headers.get("x-ratelimit-remaining-second")
+                if remaining_hdr and remaining_hdr.isdigit() and int(remaining_hdr) == 0:
+                    reset_hdr = resp.headers.get("ratelimit-reset")
+                    wait_sec = float(reset_hdr) if reset_hdr and reset_hdr.isdigit() else 1.0
+                    OPENSUBTITLES_LIMITER.trigger_cooldown(wait_sec)
+
                 return resp
             except httpx.RequestError as exc:
                 if attempt == max_retries - 1:
