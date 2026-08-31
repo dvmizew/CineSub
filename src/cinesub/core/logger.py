@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import logging
-
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -12,11 +10,6 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 from rich.theme import Theme
-
-for logger_name in ["httpx", "httpcore", "urllib3", "guessit"]:
-    external_logger = logging.getLogger(logger_name)
-    external_logger.setLevel(logging.CRITICAL)
-    external_logger.propagate = False
 
 _THEME = Theme(
     {

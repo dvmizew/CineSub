@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cinesub.modules.syncer import is_ffmpeg_available, sync_subtitle_audio
+from cinesub.modules.syncer import sync_subtitle_audio
 
 
 def test_ffmpeg_detection() -> None:
-    """Test ffmpeg detection."""
-    assert isinstance(is_ffmpeg_available(), bool)
+    """Test ffmpeg detection with shutil.which."""
+    res = shutil.which("ffmpeg")
+    assert res is None or isinstance(res, str)
 
 
 def test_sync_missing_files(tmp_path: Path, sample_video_file: Path, sample_srt_file: Path) -> None:
@@ -37,7 +39,7 @@ def test_sync_execution(sample_video_file: Path, sample_srt_file: Path) -> None:
             stderr="offset seconds: -0.350\nframerate scale factor: 1.0000\n",
         )
 
-    with patch("cinesub.modules.syncer.is_ffmpeg_available", return_value=True), patch(
+    with patch("shutil.which", return_value="/usr/bin/ffmpeg"), patch(
         "cinesub.modules.syncer.subprocess.run", side_effect=mock_subprocess_run
     ):
         res = sync_subtitle_audio(

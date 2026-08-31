@@ -3,83 +3,56 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from babelfish import Error as BabelfishError
 from babelfish import Language
 from guessit import guessit
 from rapidfuzz import fuzz
 
+from cinesub.core.constants import (
+    SCORE_BASE,
+    SCORE_CODEC_MATCH,
+    SCORE_HASH_MATCH_BASE,
+    SCORE_MAX_DOWNLOAD_BONUS,
+    SCORE_RELEASE_GROUP_THRESHOLD,
+    SCORE_RELEASE_GROUP_WEIGHT,
+    SCORE_RESOLUTION_MATCH,
+    SCORE_SOURCE_MATCH,
+    SUBTITLE_ENCODINGS,
+    SUPPORTED_VIDEO_EXTS,
+)
 from cinesub.core.hasher import calculate_movie_hash
 from cinesub.core.logger import LOG
 from cinesub.core.models import VideoMetadata
 
 
 def normalize_language(lang: str) -> str:
-    """Normalize a language code or name to a standard 2-letter ISO 639-1 code.
-
-    Examples:
-        'ro', 'rum', 'ron', 'romanian' -> 'ro'
-        'en', 'eng', 'english' -> 'en'
-    """
+    """Normalize language code or name to standard 2-letter ISO 639-1 code."""
     cleaned = lang.strip().lower()
-    for converter in (Language.fromalpha2, Language.fromalpha3b, Language.fromname):
+    converters = (Language.fromalpha2, Language.fromalpha3b, Language.fromname)
+    for converter in converters:
         try:
             return str(converter(cleaned).alpha2)
-        except (ValueError, LookupError, AttributeError):
+        except (ValueError, LookupError, AttributeError, BabelfishError):
             pass
 
-    # Common manual fallback mappings
-    fallbacks: dict[str, str] = {
-        "ro": "ro",
-        "rum": "ro",
-        "ron": "ro",
-        "romanian": "ro",
-        "en": "en",
-        "eng": "en",
-        "english": "en",
-        "es": "es",
-        "spa": "es",
-        "spanish": "es",
-        "fr": "fr",
-        "fre": "fr",
-        "fra": "fr",
-        "french": "fr",
-        "de": "de",
-        "ger": "de",
-        "deu": "de",
-        "german": "de",
-        "it": "it",
-        "ita": "it",
-        "italian": "it",
-    }
-    return fallbacks.get(cleaned, cleaned[:2])
+    return cleaned[:2]
 
 
 def decode_and_normalize_subtitle_content(raw_bytes: bytes) -> bytes:
     """Decode raw subtitle bytes from various encodings and re-encode as clean UTF-8.
 
-    Handles UTF-8 with/without BOM, CP1250 (Central/Eastern Europe/Romania),
-    CP1252 (Western), ISO-8859-1, and ISO-8859-2.
+    Handles UTF-8 with/without BOM, CP1250, CP1252, ISO-8859-16, ISO-8859-2, ISO-8859-1.
     """
     if not raw_bytes:
         return b""
 
-    # Candidate encodings in order of priority
-    candidates = [
-        "utf-8-sig",
-        "utf-8",
-        "cp1250",
-        "cp1252",
-        "iso-8859-16",
-        "iso-8859-2",
-        "iso-8859-1",
-    ]
-    for encoding in candidates:
+    for encoding in SUBTITLE_ENCODINGS:
         try:
             decoded_text = raw_bytes.decode(encoding)
             return decoded_text.encode("utf-8")
         except UnicodeDecodeError:
             continue
 
-    # Fallback to UTF-8 with replacement for any unmappable byte sequences
     return raw_bytes.decode("utf-8", errors="replace").encode("utf-8")
 
 
@@ -87,7 +60,7 @@ def parse_video_metadata(video_path: str | Path, compute_hash: bool = True) -> V
     """Extract structured video metadata using guessit and calculate the video hash.
 
     Args:
-        video_path: Path to the target video file.
+        video_path: Path to target video file.
         compute_hash: Whether to calculate the 64-bit OpenSubtitles hash.
 
     Returns:
@@ -177,37 +150,33 @@ def score_subtitle_candidate(
     matched_by_hash: bool = False,
     downloads: int | None = None,
 ) -> float:
-    """Calculate candidate score using rapidfuzz string matching.
+    """Calculate candidate relevance score using rapidfuzz string matching.
 
     Exact hash matches receive top priority (score >= 100).
     """
-    if matched_by_hash:
-        return 100.0 + (min(downloads or 0, 1000) / 100.0)
+    download_bonus = min(float(downloads or 0) / 100.0, SCORE_MAX_DOWNLOAD_BONUS)
 
-    score = 10.0
+    if matched_by_hash:
+        return SCORE_HASH_MATCH_BASE + download_bonus
+
+    score = SCORE_BASE
     rel_lower = release_name.lower()
 
-    # RapidFuzz release group matching
     if video_meta.release_group:
         grp_ratio = fuzz.partial_ratio(video_meta.release_group.lower(), rel_lower)
-        if grp_ratio > 80:
-            score += 40.0 * (grp_ratio / 100.0)
+        if grp_ratio >= SCORE_RELEASE_GROUP_THRESHOLD:
+            score += SCORE_RELEASE_GROUP_WEIGHT * (grp_ratio / 100.0)
 
-    # Resolution match
     if video_meta.screen_size and video_meta.screen_size.lower() in rel_lower:
-        score += 15.0
+        score += SCORE_RESOLUTION_MATCH
 
-    # Source match (e.g., BluRay, WEBRip)
     if video_meta.source and video_meta.source.lower() in rel_lower:
-        score += 15.0
+        score += SCORE_SOURCE_MATCH
 
-    # Video Codec match
     if video_meta.video_codec and video_meta.video_codec.lower() in rel_lower:
-        score += 10.0
+        score += SCORE_CODEC_MATCH
 
-    if downloads:
-        score += min(downloads / 100.0, 10.0)
-
+    score += download_bonus
     return score
 
 
@@ -220,8 +189,6 @@ def find_video_files(path: str | Path) -> list[Path]:
     Returns:
         Sorted list of matching Path objects.
     """
-    from cinesub.core.constants import SUPPORTED_VIDEO_EXTS
-
     p = Path(path).resolve()
     if not p.exists():
         raise FileNotFoundError(f"Path does not exist: {p}")

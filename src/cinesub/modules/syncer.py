@@ -4,14 +4,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from cinesub.core.models import SyncResult
-
-
-def is_ffmpeg_available() -> bool:
-    """Check whether ffmpeg is installed and accessible in system PATH."""
-    return shutil.which("ffmpeg") is not None
 
 
 def sync_subtitle_audio(
@@ -21,22 +17,7 @@ def sync_subtitle_audio(
     keep_backup: bool = False,
     max_offset_seconds: int = 600,
 ) -> SyncResult:
-    """Synchronize subtitle timestamps against video audio stream using ffsubsync.
-
-    Args:
-        video_path: Target video file path.
-        srt_path: Input subtitle file path.
-        output_path: Output synchronized srt path (defaults to overwriting srt_path).
-        keep_backup: If True and overwriting, saves `*.orig.srt`.
-        max_offset_seconds: Maximum search window for alignment.
-
-    Returns:
-        SyncResult instance.
-
-    Raises:
-        FileNotFoundError: If input video or subtitle file does not exist.
-        RuntimeError: If ffmpeg is missing or synchronization fails.
-    """
+    """Synchronize subtitle timestamps against video audio stream using ffsubsync."""
     video_p = Path(video_path).resolve()
     srt_p = Path(srt_path).resolve()
     target_out = Path(output_path).resolve() if output_path else srt_p
@@ -45,10 +26,13 @@ def sync_subtitle_audio(
         raise FileNotFoundError(f"Video file not found: {video_p}")
     if not srt_p.is_file():
         raise FileNotFoundError(f"Subtitle file not found: {srt_p}")
-    if not is_ffmpeg_available():
+    if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg not found in PATH. ffmpeg is required by ffsubsync.")
 
-    temp_out = srt_p.parent / f"{srt_p.stem}.synced.tmp.srt"
+    with tempfile.NamedTemporaryFile(
+        dir=srt_p.parent, prefix=f".{srt_p.stem}_sync_", suffix=".srt", delete=False
+    ) as tmp_file:
+        temp_out = Path(tmp_file.name)
 
     cmd = [
         sys.executable,
@@ -73,7 +57,6 @@ def sync_subtitle_audio(
         if not temp_out.is_file() or temp_out.stat().st_size == 0:
             raise RuntimeError("ffsubsync failed to generate a synchronized subtitle file.")
 
-        # Extract offset and framerate scale from ffsubsync logs
         output_text = f"{res.stdout}\n{res.stderr}"
         offset: float | None = None
         scale: float | None = None

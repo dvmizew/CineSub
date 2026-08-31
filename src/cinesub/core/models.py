@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 
 @dataclass
@@ -21,16 +20,6 @@ class VideoMetadata:
     moviehash: str | None = None
     file_size: int = 0
 
-    @property
-    def filename(self) -> str:
-        return self.file_path.name
-
-    @property
-    def query_title(self) -> str:
-        if self.year:
-            return f"{self.title} {self.year}"
-        return self.title
-
 
 @dataclass
 class SubtitleMatch:
@@ -46,7 +35,6 @@ class SubtitleMatch:
     hearing_impaired: bool = False
     fps: float | str | None = None
     score: float = 0.0
-    raw_data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

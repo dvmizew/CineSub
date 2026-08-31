@@ -6,6 +6,11 @@ from pathlib import Path
 
 from cinesub.core.constants import HASH_CHUNK_SIZE, MIN_HASH_FILE_SIZE
 
+_INT64_STRUCT = struct.Struct("<q")
+_BYTESIZE = _INT64_STRUCT.size
+_NUM_CHUNKS = HASH_CHUNK_SIZE // _BYTESIZE
+_MASK_64 = 0xFFFFFFFFFFFFFFFF
+
 
 def calculate_movie_hash(file_path: str | Path) -> str:
     """Calculate the 64-bit OpenSubtitles hash for a video file.
@@ -32,25 +37,23 @@ def calculate_movie_hash(file_path: str | Path) -> str:
         )
 
     hash_val = file_size
-    bytesize = struct.calcsize("<q")
-    num_chunks = HASH_CHUNK_SIZE // bytesize
 
     with open(path, "rb") as f:
         # First 64KB
-        for _ in range(num_chunks):
-            chunk = f.read(bytesize)
-            if len(chunk) < bytesize:
+        for _ in range(_NUM_CHUNKS):
+            chunk = f.read(_BYTESIZE)
+            if len(chunk) < _BYTESIZE:
                 break
-            (val,) = struct.unpack("<q", chunk)
-            hash_val = (hash_val + val) & 0xFFFFFFFFFFFFFFFF
+            (val,) = _INT64_STRUCT.unpack(chunk)
+            hash_val = (hash_val + val) & _MASK_64
 
         # Last 64KB
         f.seek(max(0, file_size - HASH_CHUNK_SIZE), os.SEEK_SET)
-        for _ in range(num_chunks):
-            chunk = f.read(bytesize)
-            if len(chunk) < bytesize:
+        for _ in range(_NUM_CHUNKS):
+            chunk = f.read(_BYTESIZE)
+            if len(chunk) < _BYTESIZE:
                 break
-            (val,) = struct.unpack("<q", chunk)
-            hash_val = (hash_val + val) & 0xFFFFFFFFFFFFFFFF
+            (val,) = _INT64_STRUCT.unpack(chunk)
+            hash_val = (hash_val + val) & _MASK_64
 
     return f"{hash_val:016x}"

@@ -12,7 +12,12 @@ from urllib.parse import urljoin
 import httpx
 import orjson
 
-from cinesub.core.constants import SUBDL_API_URL, SUBDL_DL_URL
+from cinesub.core.constants import (
+    SUBDL_API_URL,
+    SUBDL_DL_URL,
+    SUBTITLE_EXTENSIONS,
+    ZIP_MAGIC_BYTES,
+)
 from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
@@ -128,7 +133,6 @@ class SubdlService:
                         hearing_impaired=bool(sub.get("hi", False)),
                         fps=sub.get("fps") or sub.get("framerate"),
                         score=score,
-                        raw_data=sub,
                     )
                 )
 
@@ -150,14 +154,14 @@ class SubdlService:
         content = resp.content
         destination.parent.mkdir(parents=True, exist_ok=True)
 
-        if content.startswith(b"PK\x03\x04") or zipfile.is_zipfile(io.BytesIO(content)):
+        if content.startswith(ZIP_MAGIC_BYTES) or zipfile.is_zipfile(io.BytesIO(content)):
             with zipfile.ZipFile(io.BytesIO(content)) as zf:
                 srt_files = [n for n in zf.namelist() if n.lower().endswith(".srt")]
                 if not srt_files:
                     all_subs = [
                         n
                         for n in zf.namelist()
-                        if any(n.lower().endswith(ext) for ext in [".srt", ".vtt", ".sub"])
+                        if any(n.lower().endswith(ext) for ext in SUBTITLE_EXTENSIONS)
                     ]
                     if not all_subs:
                         raise RuntimeError("No subtitle file found in SubDL ZIP archive.")

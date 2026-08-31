@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Annotated
 
 from cyclopts import App, Parameter
 from dotenv import load_dotenv
-from rich.panel import Panel
 from rich.table import Table
 
 from cinesub import __version__
 from cinesub.core.constants import DEFAULT_LANGUAGE, DEFAULT_TIMEOUT, USER_AGENT
 from cinesub.core.logger import CONSOLE, LOG
 from cinesub.modules.downloader import download_and_sync_batch, download_bulk_batch
-from cinesub.modules.syncer import is_ffmpeg_available
 
 load_dotenv()
 
@@ -25,14 +24,6 @@ app = App(
     help="CineSub - Subtitle searching, downloading, and audio-based synchronization.",
     result_action="return_value",
 )
-
-
-def _print_header() -> None:
-    banner = (
-        f"[bold cyan]CineSub[/bold cyan] [dim]v{__version__}[/dim] "
-        "[white]— Subtitle Search, Download & Audio Synchronization[/white]"
-    )
-    CONSOLE.print(Panel.fit(banner, border_style="cyan"))
 
 
 @app.command
@@ -104,7 +95,6 @@ def sync(
 ) -> dict:
     """Download the single best subtitle and optionally synchronize it to audio dialogue."""
     LOG.verbose = verbose
-    _print_header()
 
     try:
         report = download_and_sync_batch(
@@ -251,7 +241,6 @@ def bulk(
 ) -> dict:
     """Download multiple subtitle alternatives for manual inspection and comparison."""
     LOG.verbose = verbose
-    _print_header()
 
     try:
         report = download_bulk_batch(
@@ -316,21 +305,27 @@ def bulk(
         return {"status": "error", "error": str(exc)}
 
 
+def _mask_secret(value: str) -> str:
+    val = value.strip()
+    if not val:
+        return ""
+    if len(val) <= 8:
+        return "Configured (***)"
+    return f"Configured ({val[:4]}...{val[-4:]})"
+
+
 @app.command
 def config() -> None:
-    """Display current API credentials and system status."""
-    _print_header()
-
     os_key = os.getenv("OPENSUBTITLES_API_KEY", "").strip()
     subdl_key = os.getenv("SUBDL_API_KEY", "").strip()
-    ffmpeg_ok = is_ffmpeg_available()
+    ffmpeg_ok = shutil.which("ffmpeg") is not None
 
     table = Table(title="[bold cyan]CineSub Configuration Status[/bold cyan]")
     table.add_column("Component", style="cyan")
     table.add_column("Status / Value", style="white")
 
     os_status = (
-        "[green]Configured[/green]"
+        f"[green]{_mask_secret(os_key)}[/green]"
         if os_key
         else "[yellow]Missing (OPENSUBTITLES_API_KEY)[/yellow]"
     )
@@ -339,7 +334,7 @@ def config() -> None:
     table.add_row("OpenSubtitles Rate Limit", "4.0 req/s (Safe Client Cap)")
 
     subdl_status = (
-        "[green]Configured[/green]"
+        f"[green]{_mask_secret(subdl_key)}[/green]"
         if subdl_key
         else "[yellow]Missing (SUBDL_API_KEY)[/yellow]"
     )

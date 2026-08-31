@@ -79,13 +79,11 @@ def download_and_sync(
     if not all_matches:
         raise ValueError(f"No [{target_lang.upper()}] subtitles found for '{video_meta.title}'.")
 
-    # Priority 1: Exact Hash Match
     if hash_matches:
         hash_matches.sort(key=lambda m: m.score, reverse=True)
         best_match = hash_matches[0]
         LOG.success(f"Matched by exact Video Hash via {best_match.provider.upper()}")
     else:
-        # Priority 2: Highest relevance score
         all_matches.sort(key=lambda m: m.score, reverse=True)
         best_match = all_matches[0]
         LOG.info(
@@ -112,9 +110,8 @@ def download_and_sync(
 def _format_sync_item_report(
     meta: VideoMetadata, match: SubtitleMatch, sync_res: SyncResult | None, srt_p: Path
 ) -> dict[str, Any]:
-    """Format single sync result dictionary for structured reporting."""
     return {
-        "video_file": meta.filename,
+        "video_file": meta.file_path.name,
         "video_path": str(meta.file_path),
         "title": meta.title,
         "year": meta.year,
@@ -262,19 +259,22 @@ def download_bulk(
     # Deduplicate and sort by relevance score
     candidates.sort(key=lambda m: m.score, reverse=True)
     selected: list[SubtitleMatch] = []
-    seen: set[str] = set()
+    seen_releases: set[str] = set()
+    selected_ids: set[str] = set()
 
     for c in candidates:
         key = c.release_name.strip().lower()
-        if key not in seen:
-            seen.add(key)
+        if key not in seen_releases:
+            seen_releases.add(key)
+            selected_ids.add(c.id)
             selected.append(c)
         if len(selected) >= limit:
             break
 
     if len(selected) < limit:
         for c in candidates:
-            if c not in selected:
+            if c.id not in selected_ids:
+                selected_ids.add(c.id)
                 selected.append(c)
             if len(selected) >= limit:
                 break
@@ -303,9 +303,8 @@ def download_bulk(
 def _format_bulk_item_report(
     meta: VideoMetadata, items: list[tuple[SubtitleMatch, Path]]
 ) -> dict[str, Any]:
-    """Format single bulk result dictionary for structured reporting."""
     return {
-        "video_file": meta.filename,
+        "video_file": meta.file_path.name,
         "video_path": str(meta.file_path),
         "subtitles": [
             {

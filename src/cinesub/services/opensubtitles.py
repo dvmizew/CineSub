@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 import orjson
 
-from cinesub.core.constants import OPENSUBTITLES_API_URL, USER_AGENT
+from cinesub.core.constants import GZIP_MAGIC_BYTES, OPENSUBTITLES_API_URL, USER_AGENT
 from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
@@ -81,7 +81,6 @@ class OpenSubtitlesService:
         matches: list[SubtitleMatch] = []
         seen_file_ids: set[str | int | None] = set()
 
-        # Step 1: Exact Hash Search
         if video_meta.moviehash:
             try:
                 hash_matches = self._search_request(
@@ -97,7 +96,6 @@ class OpenSubtitlesService:
             except Exception as exc:
                 LOG.debug(f"OpenSubtitles hash search error: {exc}")
 
-        # Step 2: Fallback query search
         try:
             params: dict[str, Any] = {"query": video_meta.title, "languages": language}
             if video_meta.is_episode:
@@ -175,7 +173,6 @@ class OpenSubtitlesService:
                     hearing_impaired=hi,
                     fps=fps,
                     score=score,
-                    raw_data=item,
                 )
             )
         return results
@@ -204,7 +201,7 @@ class OpenSubtitlesService:
         file_resp.raise_for_status()
 
         content = file_resp.content
-        if content.startswith(b"\x1f\x8b"):
+        if content.startswith(GZIP_MAGIC_BYTES):
             content = gzip.decompress(content)
 
         clean_bytes = decode_and_normalize_subtitle_content(content)
