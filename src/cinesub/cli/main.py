@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
+import signal
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -12,14 +14,32 @@ from rich.table import Table
 
 from cinesub import __version__
 from cinesub.core.constants import DEFAULT_LANGUAGE, DEFAULT_TIMEOUT, IGNORED_DIRS, USER_AGENT
-from cinesub.core.logger import CONSOLE, LOG
+from cinesub.core.logger import (
+    CONSOLE,
+    LOG,
+    create_progress,
+    interactive_pause_listener,
+    wait_if_paused,
+)
 from cinesub.core.models import VideoMetadata
-from cinesub.core.utils import find_video_files, parse_directory_metadata, parse_video_metadata
+from cinesub.core.utils import (
+    find_video_files,
+    is_interruption,
+    parse_directory_metadata,
+    parse_video_metadata,
+)
 from cinesub.modules.downloader import download_batch, download_bulk_batch
 from cinesub.modules.extractor import extract_embedded_subtitles_batch
 from cinesub.services.tmdb import TmdbService
 
 load_dotenv()
+
+if hasattr(signal, "SIGCONT"):
+    with contextlib.suppress(ValueError, OSError):
+        signal.signal(
+            signal.SIGCONT,
+            lambda *_: LOG.info("▶️ [bold green]Resumed execution.[/]"),
+        )
 
 app = App(
     name="cinesub",
@@ -219,9 +239,13 @@ def download(
                 simulated_path = matched_subtitle.get("saved_path")
                 CONSOLE.print(f"\n[bold yellow]⚡ Simulated target path:[/] {simulated_path}\n")
         else:
-            dashboard_title = (
-                "⚡ CineSub Dry-Run Simulation" if dry_run else "✓ CineSub Download Summary"
-            )
+            if report.get("interrupted"):
+                dashboard_title = "⏹ CineSub Download Interrupted (Ctrl+C)"
+            elif dry_run:
+                dashboard_title = "⚡ CineSub Dry-Run Simulation"
+            else:
+                dashboard_title = "✓ CineSub Download Summary"
+
             _render_stats_card(
                 title=dashboard_title,
                 total=total_files,
@@ -281,6 +305,11 @@ def download(
 
         return report
 
+    except (KeyboardInterrupt, RuntimeError) as exc:
+        if not is_interruption(exc):
+            raise
+        LOG.warning("\n⏹️  [bold yellow]INTERRUPTED[/] - Download stopped by user (Ctrl+C).")
+        return {"status": "interrupted"}
     except Exception as exc:
         LOG.error(str(exc))
         return {"status": "error", "error": str(exc)}
@@ -412,7 +441,13 @@ def bulk(
             else:
                 CONSOLE.print(f"\n[bold yellow]⚡ Simulated directory:[/] {saved_loc}\n")
         else:
-            dashboard_title = "⚡ CineSub Bulk Dry-Run" if dry_run else "✓ CineSub Bulk Summary"
+            if report.get("interrupted"):
+                dashboard_title = "⏹ CineSub Bulk Interrupted (Ctrl+C)"
+            elif dry_run:
+                dashboard_title = "⚡ CineSub Bulk Dry-Run"
+            else:
+                dashboard_title = "✓ CineSub Bulk Summary"
+
             _render_stats_card(
                 title=dashboard_title,
                 total=total_files,
@@ -447,6 +482,11 @@ def bulk(
 
         return report
 
+    except (KeyboardInterrupt, RuntimeError) as exc:
+        if not is_interruption(exc):
+            raise
+        LOG.warning("\n⏹️  [bold yellow]INTERRUPTED[/] - Bulk download stopped by user (Ctrl+C).")
+        return {"status": "interrupted"}
     except Exception as exc:
         LOG.error(str(exc))
         return {"status": "error", "error": str(exc)}
@@ -613,65 +653,83 @@ def extract(
         LOG.error(f"Path does not exist: {resolved_path}")
         return {"status": "error", "message": f"Path does not exist: {resolved_path}"}
 
-    report = extract_embedded_subtitles_batch(
-        path=resolved_path,
-        language=language,
-        force=force,
-        dry_run=dry_run,
-    )
-
-    results = report.get("results", [])
-    total_files = report.get("total_files", 0)
-    duration = float(report.get("duration_seconds", 0.0))
-
-    dashboard_title = "⚡ CineSub Extract Dry-Run" if dry_run else "✓ CineSub Extract Summary"
-    _render_stats_card(
-        title=dashboard_title,
-        total=total_files,
-        success=report.get("successful", 0),
-        skipped=report.get("skipped", 0),
-        dry_run=report.get("dry_run_count", 0),
-        failed=report.get("failed", 0),
-        duration=duration,
-        throughput=float(total_files / max(0.001, duration)),
-        is_dry_run=dry_run,
-    )
-
-    table = Table(title="[bold cyan]Embedded Subtitle Extraction Results[/bold cyan]")
-    table.add_column("Video File", style="white")
-    table.add_column("Track", justify="right", style="magenta")
-    table.add_column("Codec", style="cyan")
-    table.add_column("Lang", style="yellow")
-    table.add_column("Status", justify="center")
-    table.add_column("Output File / Details", style="green")
-
-    for entry in results:
-        entry_status = entry.get("status")
-        if entry_status == "success":
-            status_display = "[bold green]EXTRACTED[/bold green]"
-        elif entry_status == "dry_run":
-            status_display = "[bold yellow]DRY-RUN[/bold yellow]"
-        elif entry_status == "skipped":
-            status_display = "[bold dim]SKIPPED[/bold dim]"
-        else:
-            status_display = "[bold red]FAILED[/bold red]"
-
-        output_detail = Path(entry.get("target_path", "")).name
-        if entry_status not in ("success", "dry_run"):
-            output_detail = f"{output_detail} ({entry.get('message', '')})"
-
-        table.add_row(
-            entry.get("video_file"),
-            str(entry.get("stream_index")),
-            entry.get("codec"),
-            entry.get("language", "").upper(),
-            status_display,
-            output_detail,
+    try:
+        report = extract_embedded_subtitles_batch(
+            path=resolved_path,
+            language=language,
+            force=force,
+            dry_run=dry_run,
         )
 
-    CONSOLE.print(table)
-    CONSOLE.print()
-    return report
+        results = report.get("results", [])
+        total_files = report.get("total_files", 0)
+        duration = float(report.get("duration_seconds", 0.0))
+
+        if report.get("interrupted"):
+            dashboard_title = "⏹ CineSub Extract Interrupted (Ctrl+C)"
+        elif dry_run:
+            dashboard_title = "⚡ CineSub Extract Dry-Run"
+        else:
+            dashboard_title = "✓ CineSub Extract Summary"
+
+        _render_stats_card(
+            title=dashboard_title,
+            total=total_files,
+            success=report.get("successful", 0),
+            skipped=report.get("skipped", 0),
+            dry_run=report.get("dry_run_count", 0),
+            failed=report.get("failed", 0),
+            duration=duration,
+            throughput=float(total_files / max(0.001, duration)),
+            is_dry_run=dry_run,
+        )
+
+        table = Table(title="[bold cyan]Embedded Subtitle Extraction Results[/bold cyan]")
+        table.add_column("Video File", style="white")
+        table.add_column("Track", justify="right", style="magenta")
+        table.add_column("Codec", style="cyan")
+        table.add_column("Lang", style="yellow")
+        table.add_column("Status", justify="center")
+        table.add_column("Output File / Details", style="green")
+
+        for entry in results:
+            entry_status = entry.get("status")
+            if entry_status == "success":
+                status_display = "[bold green]EXTRACTED[/bold green]"
+            elif entry_status == "dry_run":
+                status_display = "[bold yellow]DRY-RUN[/bold yellow]"
+            elif entry_status == "skipped":
+                status_display = "[bold dim]SKIPPED[/bold dim]"
+            else:
+                status_display = "[bold red]FAILED[/bold red]"
+
+            output_detail = Path(entry.get("target_path", "")).name
+            if entry_status not in ("success", "dry_run"):
+                output_detail = f"{output_detail} ({entry.get('message', '')})"
+
+            table.add_row(
+                entry.get("video_file"),
+                str(entry.get("stream_index")),
+                entry.get("codec"),
+                entry.get("language", "").upper(),
+                status_display,
+                output_detail,
+            )
+
+        CONSOLE.print(table)
+        CONSOLE.print()
+        return report
+
+    except (KeyboardInterrupt, RuntimeError) as exc:
+        if not is_interruption(exc):
+            raise
+        LOG.warning(
+            "\n⏹️  [bold yellow]INTERRUPTED[/] - Subtitle extraction stopped by user (Ctrl+C)."
+        )
+        return {"status": "interrupted"}
+    except Exception as exc:
+        LOG.error(str(exc))
+        return {"status": "error", "error": str(exc)}
 
 
 @app.command(name="tmdb")
@@ -809,81 +867,119 @@ def tmdb(
     seen_tmdb_ids: set[int] = set()
     sync_watchlist = watchlist or bookmark
     bookmark_label = "Bookmarked" if bookmark else "Watchlisted"
+    interrupted = False
 
-    for media_meta in media_targets:
-        display_label = media_meta.file_path.name
-        match_candidate = (
-            tmdb_svc.search_tv(media_meta.title, media_meta.year)
-            if media_meta.is_episode
-            else tmdb_svc.search_movie(media_meta.title, media_meta.year)
-        )
-        if not match_candidate:
-            table.add_row(
-                display_label, "[red]No match found[/red]", "-", "-", "-", "[red]FAILED[/red]"
-            )
-            processed.append({"file": display_label, "status": "not_found"})
-            continue
+    progress = create_progress()
+    with progress:
+        task = progress.add_task("[cyan]Processing media with TMDb...", total=len(media_targets))
+        with interactive_pause_listener(progress, task):
+            try:
+                for media_meta in media_targets:
+                    wait_if_paused()
+                    display_label = media_meta.file_path.name
+                    match_candidate = (
+                        tmdb_svc.search_tv(media_meta.title, media_meta.year)
+                        if media_meta.is_episode
+                        else tmdb_svc.search_movie(media_meta.title, media_meta.year)
+                    )
+                    if not match_candidate:
+                        table.add_row(
+                            display_label,
+                            "[red]No match found[/red]",
+                            "-",
+                            "-",
+                            "-",
+                            "[red]FAILED[/red]",
+                        )
+                        processed.append({"file": display_label, "status": "not_found"})
+                        progress.advance(task)
+                        continue
 
-        raw_id = match_candidate.get("id")
-        if raw_id is None:
-            table.add_row(
-                display_label, "[red]No match found[/red]", "-", "-", "-", "[red]FAILED[/red]"
-            )
-            processed.append({"file": display_label, "status": "not_found"})
-            continue
+                    raw_id = match_candidate.get("id")
+                    if raw_id is None:
+                        table.add_row(
+                            display_label,
+                            "[red]No match found[/red]",
+                            "-",
+                            "-",
+                            "-",
+                            "[red]FAILED[/red]",
+                        )
+                        processed.append({"file": display_label, "status": "not_found"})
+                        progress.advance(task)
+                        continue
 
-        tmdb_id = int(raw_id)
-        matched_title = (
-            match_candidate.get("title") or match_candidate.get("name") or media_meta.title
-        )
-        release_date = (
-            match_candidate.get("release_date") or match_candidate.get("first_air_date") or ""
-        )
-        year_str = release_date[:4] if release_date else "N/A"
+                    tmdb_id = int(raw_id)
+                    matched_title = (
+                        match_candidate.get("title")
+                        or match_candidate.get("name")
+                        or media_meta.title
+                    )
+                    release_date = (
+                        match_candidate.get("release_date")
+                        or match_candidate.get("first_air_date")
+                        or ""
+                    )
+                    year_str = release_date[:4] if release_date else "N/A"
 
-        external_ids = tmdb_svc.get_external_ids(tmdb_id, is_tv=media_meta.is_episode)
-        imdb_id = external_ids.get("imdb_id") or "N/A"
+                    external_ids = tmdb_svc.get_external_ids(tmdb_id, is_tv=media_meta.is_episode)
+                    imdb_id = external_ids.get("imdb_id") or "N/A"
 
-        actions: list[str] = []
-        is_duplicate = tmdb_id in seen_tmdb_ids
-        seen_tmdb_ids.add(tmdb_id)
+                    actions: list[str] = []
+                    is_duplicate = tmdb_id in seen_tmdb_ids
+                    seen_tmdb_ids.add(tmdb_id)
 
-        if favorite:
-            if is_duplicate:
-                actions.append("Favorited (already)")
-            elif not dry_run:
-                fav_ok = tmdb_svc.add_to_favorite(
-                    tmdb_id, is_tv=media_meta.is_episode, favorite=True
+                    if favorite:
+                        if is_duplicate:
+                            actions.append("Favorited (already)")
+                        elif not dry_run:
+                            fav_ok = tmdb_svc.add_to_favorite(
+                                tmdb_id, is_tv=media_meta.is_episode, favorite=True
+                            )
+                            actions.append("Favorited" if fav_ok else "Fav Failed")
+                        else:
+                            actions.append("[DRY-RUN] Favorite")
+
+                    if sync_watchlist:
+                        if is_duplicate:
+                            actions.append(f"{bookmark_label} (already)")
+                        elif not dry_run:
+                            watch_ok = tmdb_svc.add_to_watchlist(
+                                tmdb_id, is_tv=media_meta.is_episode, watchlist=True
+                            )
+                            actions.append(
+                                bookmark_label if watch_ok else f"{bookmark_label} Failed"
+                            )
+                        else:
+                            actions.append(f"[DRY-RUN] {bookmark_label}")
+
+                    status_msg = " | ".join(actions) if actions else "Matched"
+                    table.add_row(
+                        display_label,
+                        str(matched_title),
+                        year_str,
+                        str(tmdb_id),
+                        str(imdb_id),
+                        status_msg,
+                    )
+                    processed.append(
+                        {
+                            "file": display_label,
+                            "title": matched_title,
+                            "year": year_str,
+                            "tmdb_id": tmdb_id,
+                            "imdb_id": imdb_id,
+                            "status": "success",
+                        }
+                    )
+                    progress.advance(task)
+            except (KeyboardInterrupt, RuntimeError) as exc:
+                if not is_interruption(exc):
+                    raise
+                interrupted = True
+                LOG.warning(
+                    "\n⏹️  [bold yellow]INTERRUPTED[/] - TMDb querying stopped by user (Ctrl+C)."
                 )
-                actions.append("Favorited" if fav_ok else "Fav Failed")
-            else:
-                actions.append("[DRY-RUN] Favorite")
-
-        if sync_watchlist:
-            if is_duplicate:
-                actions.append(f"{bookmark_label} (already)")
-            elif not dry_run:
-                watch_ok = tmdb_svc.add_to_watchlist(
-                    tmdb_id, is_tv=media_meta.is_episode, watchlist=True
-                )
-                actions.append(bookmark_label if watch_ok else f"{bookmark_label} Failed")
-            else:
-                actions.append(f"[DRY-RUN] {bookmark_label}")
-
-        status_msg = " | ".join(actions) if actions else "Matched"
-        table.add_row(
-            display_label, str(matched_title), year_str, str(tmdb_id), str(imdb_id), status_msg
-        )
-        processed.append(
-            {
-                "file": display_label,
-                "title": matched_title,
-                "year": year_str,
-                "tmdb_id": tmdb_id,
-                "imdb_id": imdb_id,
-                "status": "success",
-            }
-        )
 
     CONSOLE.print(table)
     if not favorite and not sync_watchlist:
@@ -894,7 +990,12 @@ def tmdb(
     else:
         CONSOLE.print()
 
-    return {"status": "success", "total_files": len(media_targets), "results": processed}
+    return {
+        "status": "interrupted" if interrupted else "success",
+        "total_files": len(media_targets),
+        "processed_count": len(processed),
+        "results": processed,
+    }
 
 
 def main() -> None:

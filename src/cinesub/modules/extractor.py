@@ -10,10 +10,11 @@ from typing import Any
 
 import orjson
 
-from cinesub.core.logger import LOG
+from cinesub.core.logger import LOG, create_progress, interactive_pause_listener, wait_if_paused
 from cinesub.core.utils import (
     decode_and_normalize_subtitle_content,
     find_video_files,
+    is_interruption,
     normalize_language,
 )
 
@@ -153,6 +154,7 @@ def extract_video_embedded_subtitles(
     dry_run: bool = False,
 ) -> list[dict[str, Any]]:
     """Inspect and extract matching embedded subtitle tracks for a single video file."""
+    wait_if_paused()
     path = Path(video_path).resolve()
     tracks = inspect_embedded_subtitles(path)
     if not tracks:
@@ -260,15 +262,51 @@ def extract_embedded_subtitles_batch(
 
     start_time = time.time()
     all_results: list[dict[str, Any]] = []
+    interrupted = False
 
-    for vf in video_files:
-        file_extracted = extract_video_embedded_subtitles(
-            video_path=vf,
-            language=language,
-            force=force,
-            dry_run=dry_run,
-        )
-        all_results.extend(file_extracted)
+    if len(video_files) == 1:
+        wait_if_paused()
+        try:
+            file_extracted = extract_video_embedded_subtitles(
+                video_path=video_files[0],
+                language=language,
+                force=force,
+                dry_run=dry_run,
+            )
+            all_results.extend(file_extracted)
+        except (KeyboardInterrupt, RuntimeError) as exc:
+            if not is_interruption(exc):
+                raise
+            interrupted = True
+            LOG.warning(
+                "\n⏹️  [bold yellow]INTERRUPTED[/] - Subtitle extraction stopped by user (Ctrl+C)."
+            )
+    else:
+        progress = create_progress()
+        with progress:
+            task = progress.add_task(
+                "[cyan]Extracting embedded subtitles...", total=len(video_files)
+            )
+            with interactive_pause_listener(progress, task):
+                try:
+                    for vf in video_files:
+                        wait_if_paused()
+                        file_extracted = extract_video_embedded_subtitles(
+                            video_path=vf,
+                            language=language,
+                            force=force,
+                            dry_run=dry_run,
+                        )
+                        all_results.extend(file_extracted)
+                        progress.advance(task)
+                except (KeyboardInterrupt, RuntimeError) as exc:
+                    if not is_interruption(exc):
+                        raise
+                    interrupted = True
+                    LOG.warning(
+                        "\n⏹️  [bold yellow]INTERRUPTED[/] - "
+                        "Subtitle extraction stopped by user (Ctrl+C)."
+                    )
 
     duration = time.time() - start_time
     successful = sum(1 for r in all_results if r.get("status") == "success")
@@ -278,6 +316,7 @@ def extract_embedded_subtitles_batch(
 
     return {
         "status": "success",
+        "interrupted": interrupted,
         "total_files": len(video_files),
         "total_tracks": len(all_results),
         "successful": successful,

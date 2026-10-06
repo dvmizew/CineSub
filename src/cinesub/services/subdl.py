@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -32,6 +33,11 @@ class SubdlService:
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
+    @property
+    def is_available(self) -> bool:
+        """Check if SubDL is not currently circuit-broken due to connection outage."""
+        return SUBDL_LIMITER.is_available
+
     def _send_request(
         self,
         method: str,
@@ -56,17 +62,22 @@ class SubdlService:
                     continue
 
                 return resp
+            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+                SUBDL_LIMITER.mark_unreachable(60.0)
+                LOG.warning(f"SubDL server unreachable ({exc}). Skipping for 60s.")
+                raise
             except httpx.RequestError as exc:
                 if attempt == max_retries - 1:
                     raise
-                LOG.debug(f"SubDL network error ({exc}), retrying...")
+                backoff_delay = 0.5 * (2**attempt)
+                LOG.debug(f"SubDL network error ({exc}), retrying in {backoff_delay:.1f}s...")
+                time.sleep(backoff_delay)
 
         raise RuntimeError("SubDL request failed after retries.")
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search SubDL for matching subtitles."""
-        if not self.is_configured:
-            LOG.debug("SubDL API key not configured. Skipping.")
+        if not self.is_configured or not self.is_available:
             return []
 
         url = f"{SUBDL_API_URL}/subtitles"

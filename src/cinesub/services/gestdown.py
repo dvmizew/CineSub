@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -7,7 +8,7 @@ from urllib.parse import quote
 import httpx
 import orjson
 
-from cinesub.core.constants import DEFAULT_TIMEOUT, GESTDOWN_API_URL, USER_AGENT
+from cinesub.core.constants import GESTDOWN_API_URL, USER_AGENT
 from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
@@ -31,6 +32,11 @@ class GestdownService:
         """Gestdown is a free, public service requiring no API key."""
         return True
 
+    @property
+    def is_available(self) -> bool:
+        """Check if Gestdown is not currently circuit-broken due to connection outage."""
+        return GESTDOWN_LIMITER.is_available
+
     def _headers(self) -> dict[str, str]:
         return {
             "User-Agent": USER_AGENT,
@@ -53,7 +59,6 @@ class GestdownService:
                     url=url,
                     params=params,
                     headers=self._headers(),
-                    timeout=DEFAULT_TIMEOUT,
                 )
                 if response.status_code == 429:
                     retry_after = response.headers.get("retry-after")
@@ -63,10 +68,16 @@ class GestdownService:
                     continue
 
                 return response
+            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+                GESTDOWN_LIMITER.mark_unreachable(60.0)
+                LOG.warning(f"Gestdown server unreachable ({exc}). Skipping for 60s.")
+                raise
             except httpx.RequestError as exc:
                 if attempt == max_retries - 1:
                     raise
-                LOG.debug(f"Gestdown network error ({exc}), retrying...")
+                backoff_delay = 0.5 * (2**attempt)
+                LOG.debug(f"Gestdown network error ({exc}), retrying in {backoff_delay:.1f}s...")
+                time.sleep(backoff_delay)
 
         raise RuntimeError("Gestdown request failed after retries.")
 
@@ -76,6 +87,8 @@ class GestdownService:
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search Gestdown for episode subtitles."""
+        if not self.is_available:
+            return []
         if not video_meta.is_episode and video_meta.season is None:
             return []
         if video_meta.season is None or video_meta.episode is None:

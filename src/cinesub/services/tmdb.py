@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 import httpx
@@ -34,6 +35,11 @@ class TmdbService:
     @property
     def is_configured(self) -> bool:
         return bool(self.access_token or self.api_key)
+
+    @property
+    def is_available(self) -> bool:
+        """Check if TMDb is not currently circuit-broken due to connection outage."""
+        return TMDB_LIMITER.is_available
 
     def _headers(self) -> dict[str, str]:
         headers: dict[str, str] = {
@@ -77,16 +83,22 @@ class TmdbService:
                     continue
 
                 return resp
+            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+                TMDB_LIMITER.mark_unreachable(60.0)
+                LOG.warning(f"TMDb server unreachable ({exc}). Skipping for 60s.")
+                raise
             except httpx.RequestError as exc:
                 if attempt == max_retries - 1:
                     raise
-                LOG.debug(f"TMDb network error ({exc}), retrying...")
+                backoff_delay = 0.5 * (2**attempt)
+                LOG.debug(f"TMDb network error ({exc}), retrying in {backoff_delay:.1f}s...")
+                time.sleep(backoff_delay)
 
         raise RuntimeError("TMDb request failed after retries.")
 
     def search_movie(self, title: str, year: int | None = None) -> dict[str, Any] | None:
         """Search TMDb for a movie by title and optional release year."""
-        if not self.is_configured:
+        if not self.is_configured or not self.is_available:
             return None
 
         params: dict[str, Any] = {"query": title}
@@ -110,7 +122,7 @@ class TmdbService:
 
     def search_tv(self, title: str, year: int | None = None) -> dict[str, Any] | None:
         """Search TMDb for a TV series by title and optional premiere year."""
-        if not self.is_configured:
+        if not self.is_configured or not self.is_available:
             return None
 
         params: dict[str, Any] = {"query": title}
@@ -134,7 +146,7 @@ class TmdbService:
 
     def get_external_ids(self, media_id: int, is_tv: bool = False) -> dict[str, Any]:
         """Fetch external IDs (such as IMDb ID) for a movie or TV show."""
-        if not self.is_configured:
+        if not self.is_configured or not self.is_available:
             return {}
 
         endpoint = f"tv/{media_id}/external_ids" if is_tv else f"movie/{media_id}/external_ids"

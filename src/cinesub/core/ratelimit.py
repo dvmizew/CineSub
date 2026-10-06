@@ -18,6 +18,33 @@ class RateLimiter:
         self.last_update = time.monotonic()
         self.lock = threading.Lock()
         self.cooldown_until: float = 0.0
+        self.unreachable_until: float = 0.0
+        self.is_probing: bool = False
+
+    @property
+    def is_available(self) -> bool:
+        """Return True if service is not circuit-broken due to connection outages."""
+        with self.lock:
+            now = time.monotonic()
+            if now < self.unreachable_until:
+                return False
+            if self.is_probing:
+                return False
+            if self.unreachable_until > 0.0:
+                self.is_probing = True
+            return True
+
+    def mark_unreachable(self, seconds: float = 60.0) -> None:
+        """Mark service as temporarily unreachable due to network connection outage."""
+        with self.lock:
+            self.unreachable_until = max(self.unreachable_until, time.monotonic() + seconds)
+            self.is_probing = False
+
+    def mark_recovered(self) -> None:
+        """Mark service as recovered after a successful probe."""
+        with self.lock:
+            self.unreachable_until = 0.0
+            self.is_probing = False
 
     def acquire(self) -> None:
         """Block until a token is available and cooldown expired."""

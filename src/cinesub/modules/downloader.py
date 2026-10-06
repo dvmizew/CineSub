@@ -10,13 +10,14 @@ from typing import Any
 import orjson
 
 from cinesub.core.constants import DEFAULT_LANGUAGE, UPGRADE_HYSTERESIS_DELTA
-from cinesub.core.logger import LOG, create_progress
+from cinesub.core.logger import LOG, create_progress, interactive_pause_listener, wait_if_paused
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.utils import (
     evaluate_local_subtitle_score,
     find_video_files,
     get_subtitle_max_timestamp,
     has_existing_subtitle,
+    is_interruption,
     normalize_language,
     parse_video_metadata,
     validate_subtitle_timing,
@@ -126,6 +127,24 @@ def save_report_output(report: dict[str, Any], json_path: Path | str) -> Path:
     return out_p
 
 
+def _search_provider_worker(
+    service_name: str,
+    service_instance: Any,
+    video_meta: VideoMetadata,
+    target_lang: str,
+) -> tuple[str, list[SubtitleMatch]]:
+    """Worker task querying an individual subtitle provider in parallel."""
+    if hasattr(service_instance, "is_available") and not service_instance.is_available:
+        return service_name, []
+    LOG.info(f"Querying {service_name.upper()} API for [{target_lang.upper()}] subtitles...")
+    try:
+        matches = service_instance.search(video_meta, language=target_lang)
+        return service_name, matches
+    except Exception as exc:
+        LOG.debug(f"Provider {service_name.upper()} search error: {exc}")
+        return service_name, []
+
+
 def download_subtitle(
     video_path: str | Path,
     language: str | None = None,
@@ -135,6 +154,7 @@ def download_subtitle(
     dry_run: bool = False,
 ) -> tuple[VideoMetadata, SubtitleMatch | None, Path]:
     """Search and download the best subtitle match for a video file."""
+    wait_if_paused()
     path = Path(video_path).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Video file not found: {path}")
@@ -173,10 +193,34 @@ def download_subtitle(
             "Please check provider configuration or .env credentials."
         )
 
+    wait_if_paused()
     all_matches: list[SubtitleMatch] = []
-    for name, svc in services.items():
-        LOG.info(f"Querying {name.upper()} API for [{target_lang.upper()}] subtitles...")
-        all_matches.extend(svc.search(video_meta, language=target_lang))
+    if len(services) == 1:
+        single_name, single_svc = next(iter(services.items()))
+        _, all_matches = _search_provider_worker(single_name, single_svc, video_meta, target_lang)
+    else:
+        core_count = os.cpu_count() or 1
+        max_provider_workers = min(len(services), 2 if core_count <= 1 else 6)
+        with ThreadPoolExecutor(max_workers=max_provider_workers) as provider_executor:
+            future_to_name = {
+                provider_executor.submit(
+                    _search_provider_worker,
+                    svc_name,
+                    svc_inst,
+                    video_meta,
+                    target_lang,
+                ): svc_name
+                for svc_name, svc_inst in services.items()
+            }
+            try:
+                for future in as_completed(future_to_name):
+                    _, provider_matches = future.result()
+                    all_matches.extend(provider_matches)
+            except (KeyboardInterrupt, RuntimeError) as exc:
+                if not is_interruption(exc):
+                    raise
+                provider_executor.shutdown(wait=True, cancel_futures=True)
+                raise
 
     if not all_matches:
         raise ValueError(f"No [{target_lang.upper()}] subtitles found for '{video_meta.title}'.")
@@ -201,6 +245,7 @@ def download_subtitle(
             f"Selected best candidate via {best_match.provider.upper()}: {best_match.release_name}"
         )
 
+    wait_if_paused()
     if dry_run:
         LOG.info(
             f"[yellow][DRY-RUN][/yellow] Would download into: [white]{target_srt.name}[/white]"
@@ -268,6 +313,7 @@ def _batch_download_worker(
     dry_run: bool,
 ) -> dict[str, Any]:
     """Worker task executing subtitle download workflow for a single video file."""
+    wait_if_paused()
     try:
         (
             video_meta,
@@ -328,48 +374,73 @@ def download_batch(
         raise FileNotFoundError(f"No valid video files found in: {target_path}")
 
     report_items: list[dict[str, Any]] = []
+    interrupted = False
 
     if len(video_files) == 1:
-        report_items.append(
-            _batch_download_worker(
-                video_files[0],
-                language,
-                provider,
-                force,
-                use_lang_suffix,
-                dry_run,
+        try:
+            report_items.append(
+                _batch_download_worker(
+                    video_files[0],
+                    language,
+                    provider,
+                    force,
+                    use_lang_suffix,
+                    dry_run,
+                )
             )
-        )
+        except (KeyboardInterrupt, RuntimeError) as exc:
+            if not is_interruption(exc):
+                raise
+            interrupted = True
+            LOG.warning(
+                "\n⏹️  [bold yellow]INTERRUPTED[/] - Subtitle download stopped by user (Ctrl+C)."
+            )
     else:
+        core_count = os.cpu_count() or 1
+        effective_threads = min(threads, 2) if core_count <= 1 else threads
+        batch_workers = min(effective_threads, len(video_files))
+        if core_count <= 1 and threads > 2:
+            LOG.debug("Single-core CPU detected: constrained batch workers to 2 for stability.")
+
         LOG.info(
             f"Found {len(video_files)} video files. "
-            f"Processing with [bold cyan]{threads}[/bold cyan] threads..."
+            f"Processing with [bold cyan]{batch_workers}[/bold cyan] threads..."
         )
 
         progress = create_progress()
-        with progress, ThreadPoolExecutor(max_workers=min(threads, len(video_files))) as executor:
+        with progress:
             task = progress.add_task("[cyan]Processing subtitles...", total=len(video_files))
-            try:
-                future_map = {
-                    executor.submit(
-                        _batch_download_worker,
-                        vf,
-                        language,
-                        provider,
-                        force,
-                        use_lang_suffix,
-                        dry_run,
-                    ): vf
-                    for vf in video_files
-                }
-                for future in as_completed(future_map):
-                    report_items.append(future.result())
-                    progress.advance(task)
-                    future_map.pop(future, None)
-            except KeyboardInterrupt:
-                LOG.warning("\nBatch execution interrupted by user. Stopping worker threads...")
-                executor.shutdown(wait=True, cancel_futures=True)
-                raise
+            with (
+                interactive_pause_listener(progress, task),
+                ThreadPoolExecutor(max_workers=batch_workers) as executor,
+            ):
+                try:
+                    future_map = {
+                        executor.submit(
+                            _batch_download_worker,
+                            vf,
+                            language,
+                            provider,
+                            force,
+                            use_lang_suffix,
+                            dry_run,
+                        ): vf
+                        for vf in video_files
+                    }
+                    for future in as_completed(future_map):
+                        wait_if_paused()
+                        report_items.append(future.result())
+                        progress.advance(task)
+                        future_map.pop(future, None)
+                except (KeyboardInterrupt, RuntimeError) as exc:
+                    if not is_interruption(exc):
+                        raise
+                    executor.shutdown(wait=True, cancel_futures=True)
+                    interrupted = True
+                    LOG.warning(
+                        "\n⏹️  [bold yellow]INTERRUPTED[/] - "
+                        "Subtitle download stopped by user (Ctrl+C)."
+                    )
 
     successful_count, dry_run_count, skipped_count, failed_count = _tally_batch_results(
         report_items
@@ -383,6 +454,7 @@ def download_batch(
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "command": "download",
         "dry_run": dry_run,
+        "interrupted": interrupted,
         "total_files": len(video_files),
         "successful": successful_count,
         "skipped": skipped_count,
@@ -415,6 +487,7 @@ def download_bulk(
     dry_run: bool = False,
 ) -> tuple[VideoMetadata, list[tuple[SubtitleMatch, Path]]]:
     """Download multiple subtitle alternatives for manual inspection."""
+    wait_if_paused()
     path = Path(video_path).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Video file not found: {path}")
@@ -436,6 +509,7 @@ def download_bulk(
             "Please check provider configuration or .env credentials."
         )
 
+    wait_if_paused()
     candidates: list[SubtitleMatch] = []
     for name, svc in services.items():
         LOG.info(f"Querying {name.upper()} API...")
@@ -478,6 +552,7 @@ def download_bulk(
             downloaded.append((match, dest_path))
             continue
 
+        wait_if_paused()
         if dry_run:
             LOG.info(
                 f"[yellow][DRY-RUN][/yellow] Would download [{idx}/{len(selected)}]: "
@@ -525,6 +600,7 @@ def _batch_bulk_worker(
     dry_run: bool,
 ) -> dict[str, Any]:
     """Worker task executing bulk subtitle retrieval for a single video file."""
+    wait_if_paused()
     try:
         video_meta, downloaded_subtitles = download_bulk(
             video_path=video_file_path,
@@ -571,48 +647,72 @@ def download_bulk_batch(
         raise FileNotFoundError(f"No valid video files found in: {target_path}")
 
     report_items: list[dict[str, Any]] = []
+    interrupted = False
 
     if len(video_files) == 1:
-        report_items.append(
-            _batch_bulk_worker(
-                video_files[0],
-                language,
-                limit,
-                provider,
-                force,
-                dry_run,
+        try:
+            report_items.append(
+                _batch_bulk_worker(
+                    video_files[0],
+                    language,
+                    limit,
+                    provider,
+                    force,
+                    dry_run,
+                )
             )
-        )
+        except (KeyboardInterrupt, RuntimeError) as exc:
+            if not is_interruption(exc):
+                raise
+            interrupted = True
+            LOG.warning(
+                "\n⏹️  [bold yellow]INTERRUPTED[/] - Bulk download stopped by user (Ctrl+C)."
+            )
     else:
+        core_count = os.cpu_count() or 1
+        effective_threads = min(threads, 2) if core_count <= 1 else threads
+        bulk_workers = min(effective_threads, len(video_files))
+        if core_count <= 1 and threads > 2:
+            LOG.debug("Single-core CPU detected: constrained bulk workers to 2 for stability.")
+
         LOG.info(
             f"Found {len(video_files)} video files for bulk download. "
-            f"Processing with [bold cyan]{threads}[/bold cyan] threads..."
+            f"Processing with [bold cyan]{bulk_workers}[/bold cyan] threads..."
         )
 
         progress = create_progress()
-        with progress, ThreadPoolExecutor(max_workers=min(threads, len(video_files))) as executor:
+        with progress:
             task = progress.add_task("[cyan]Bulk downloading...", total=len(video_files))
-            try:
-                future_map = {
-                    executor.submit(
-                        _batch_bulk_worker,
-                        vf,
-                        language,
-                        limit,
-                        provider,
-                        force,
-                        dry_run,
-                    ): vf
-                    for vf in video_files
-                }
-                for future in as_completed(future_map):
-                    report_items.append(future.result())
-                    progress.advance(task)
-                    future_map.pop(future, None)
-            except KeyboardInterrupt:
-                LOG.warning("\nBatch execution interrupted by user. Stopping worker threads...")
-                executor.shutdown(wait=True, cancel_futures=True)
-                raise
+            with (
+                interactive_pause_listener(progress, task),
+                ThreadPoolExecutor(max_workers=bulk_workers) as executor,
+            ):
+                try:
+                    future_map = {
+                        executor.submit(
+                            _batch_bulk_worker,
+                            vf,
+                            language,
+                            limit,
+                            provider,
+                            force,
+                            dry_run,
+                        ): vf
+                        for vf in video_files
+                    }
+                    for future in as_completed(future_map):
+                        wait_if_paused()
+                        report_items.append(future.result())
+                        progress.advance(task)
+                        future_map.pop(future, None)
+                except (KeyboardInterrupt, RuntimeError) as exc:
+                    if not is_interruption(exc):
+                        raise
+                    executor.shutdown(wait=True, cancel_futures=True)
+                    interrupted = True
+                    LOG.warning(
+                        "\n⏹️  [bold yellow]INTERRUPTED[/] - Bulk download stopped by user (Ctrl+C)."
+                    )
 
     successful_count, dry_run_count, _, failed_count = _tally_batch_results(report_items)
 
@@ -624,6 +724,7 @@ def download_bulk_batch(
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "command": "bulk",
         "dry_run": dry_run,
+        "interrupted": interrupted,
         "total_files": len(video_files),
         "successful": successful_count,
         "dry_run_count": dry_run_count,

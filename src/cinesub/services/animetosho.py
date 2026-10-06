@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,6 @@ import orjson
 from cinesub.core.constants import (
     ANIMETOSHO_FEED_URL,
     ANIMETOSHO_STORAGE_URL,
-    DEFAULT_TIMEOUT,
     USER_AGENT,
 )
 from cinesub.core.http import SESSION
@@ -43,6 +43,11 @@ class AnimeToshoService:
         """AnimeTosho is a public service requiring no API key."""
         return True
 
+    @property
+    def is_available(self) -> bool:
+        """Check if AnimeTosho is not currently circuit-broken due to connection outage."""
+        return ANIMETOSHO_LIMITER.is_available
+
     def _headers(self) -> dict[str, str]:
         return {
             "User-Agent": USER_AGENT,
@@ -63,7 +68,6 @@ class AnimeToshoService:
                     url,
                     params=params,
                     headers=self._headers(),
-                    timeout=DEFAULT_TIMEOUT,
                 )
                 if response.status_code == 429:
                     retry_after = response.headers.get("retry-after")
@@ -73,10 +77,16 @@ class AnimeToshoService:
                     continue
 
                 return response
+            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+                ANIMETOSHO_LIMITER.mark_unreachable(60.0)
+                LOG.warning(f"AnimeTosho server unreachable ({exc}). Skipping for 60s.")
+                raise
             except httpx.RequestError as exc:
                 if attempt == max_retries - 1:
                     raise
-                LOG.debug(f"AnimeTosho network error ({exc}), retrying...")
+                backoff_delay = 0.5 * (2**attempt)
+                LOG.debug(f"AnimeTosho network error ({exc}), retrying in {backoff_delay:.1f}s...")
+                time.sleep(backoff_delay)
 
         raise RuntimeError("AnimeTosho request failed after retries.")
 
@@ -88,6 +98,8 @@ class AnimeToshoService:
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search AnimeTosho feed for releases and extract matching subtitle attachments."""
+        if not self.is_available:
+            return []
         target_lang = normalize_language(language)
 
         if video_meta.season is not None and video_meta.episode is not None:

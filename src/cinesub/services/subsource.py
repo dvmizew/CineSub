@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -31,6 +32,11 @@ class SubsourceService:
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key)
+
+    @property
+    def is_available(self) -> bool:
+        """Check if SubSource is not currently circuit-broken due to connection outage."""
+        return SUBSOURCE_LIMITER.is_available
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -70,17 +76,22 @@ class SubsourceService:
                     SUBSOURCE_LIMITER.trigger_cooldown(wait_sec)
 
                 return resp
+            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+                SUBSOURCE_LIMITER.mark_unreachable(60.0)
+                LOG.warning(f"SubSource server unreachable ({exc}). Skipping for 60s.")
+                raise
             except httpx.RequestError as exc:
                 if attempt == max_retries - 1:
                     raise
-                LOG.debug(f"SubSource network error ({exc}), retrying...")
+                backoff_delay = 0.5 * (2**attempt)
+                LOG.debug(f"SubSource network error ({exc}), retrying in {backoff_delay:.1f}s...")
+                time.sleep(backoff_delay)
 
         raise RuntimeError("SubSource request failed after retries.")
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search SubSource for matching subtitles by media lookup and candidate scoring."""
-        if not self.is_configured:
-            LOG.debug("SubSource API key not configured. Skipping.")
+        if not self.is_configured or not self.is_available:
             return []
 
         search_url = f"{SUBSOURCE_API_URL}/movies/search"

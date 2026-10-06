@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,11 @@ class AssrtService:
         """Returns True if Assrt API token is configured."""
         return bool(self.api_token)
 
+    @property
+    def is_available(self) -> bool:
+        """Check if Assrt is not currently circuit-broken due to connection outage."""
+        return ASSRT_LIMITER.is_available
+
     def _headers(self) -> dict[str, str]:
         headers = {
             "User-Agent": USER_AGENT,
@@ -91,7 +97,6 @@ class AssrtService:
                     url,
                     params=request_params,
                     headers=self._headers(),
-                    timeout=DEFAULT_TIMEOUT,
                 )
                 if response.status_code in (429, 493):
                     retry_after = response.headers.get("retry-after")
@@ -102,6 +107,10 @@ class AssrtService:
                     continue
 
                 return response
+            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+                ASSRT_LIMITER.mark_unreachable(60.0)
+                LOG.warning(f"Assrt server unreachable ({exc}). Skipping for 60s.")
+                raise
             except httpx.RequestError as exc:
                 if attempt == max_retries - 1:
                     # Try fallback domain once
@@ -109,7 +118,9 @@ class AssrtService:
                         current_base = ASSRT_FALLBACK_URL
                         continue
                     raise
-                LOG.debug(f"Assrt network error ({exc}), retrying...")
+                backoff_delay = 0.5 * (2**attempt)
+                LOG.debug(f"Assrt network error ({exc}), retrying in {backoff_delay:.1f}s...")
+                time.sleep(backoff_delay)
 
         raise RuntimeError("Assrt request failed after retries.")
 
@@ -137,8 +148,7 @@ class AssrtService:
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search Assrt database by filename or title."""
-        if not self.is_configured:
-            LOG.debug("Assrt API token not configured. Skipping.")
+        if not self.is_configured or not self.is_available:
             return []
 
         target_lang = normalize_language(language)

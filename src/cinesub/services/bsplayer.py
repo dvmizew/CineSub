@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import secrets
+import time
 from pathlib import Path
 
 import defusedxml.ElementTree as ET
+import httpx
 from babelfish import Error as BabelfishError
 from babelfish import Language
 
-from cinesub.core.constants import DEFAULT_TIMEOUT
 from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
@@ -45,6 +46,11 @@ class BsplayerService:
         """BSPlayer is a free service requiring no user credentials."""
         return True
 
+    @property
+    def is_available(self) -> bool:
+        """Check if BSPlayer is not currently circuit-broken due to connection outage."""
+        return BSPLAYER_LIMITER.is_available
+
     def _resolve_endpoint(self) -> str:
         if self.endpoint_url:
             return self.endpoint_url
@@ -62,18 +68,34 @@ class BsplayerService:
         }
         body = _SOAP_ENVELOPE_TEMPLATE.format(url=endpoint, action=action, params=params)
 
-        BSPLAYER_LIMITER.acquire()
-        response = SESSION.post(
-            endpoint,
-            content=body.encode("utf-8"),
-            headers=headers,
-            timeout=DEFAULT_TIMEOUT,
-        )
-        if response.status_code == 429:
-            BSPLAYER_LIMITER.trigger_cooldown(5.0)
-            raise RuntimeError("BSPlayer rate limit reached.")
+        response: httpx.Response | None = None
+        for attempt in range(2):
+            BSPLAYER_LIMITER.acquire()
+            try:
+                response = SESSION.post(
+                    endpoint,
+                    content=body.encode("utf-8"),
+                    headers=headers,
+                )
+                if response.status_code == 429:
+                    BSPLAYER_LIMITER.trigger_cooldown(5.0)
+                    raise RuntimeError("BSPlayer rate limit reached.")
 
-        response.raise_for_status()
+                response.raise_for_status()
+                break
+            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+                BSPLAYER_LIMITER.mark_unreachable(60.0)
+                LOG.warning(f"BSPlayer server unreachable ({exc}). Skipping for 60s.")
+                raise
+            except httpx.RequestError as exc:
+                if attempt == 1:
+                    raise
+                backoff_delay = 0.5 * (2**attempt)
+                LOG.debug(f"BSPlayer network error ({exc}), retrying in {backoff_delay:.1f}s...")
+                time.sleep(backoff_delay)
+
+        if response is None:
+            raise RuntimeError("BSPlayer request failed.")
 
         try:
             tree = ET.fromstring(response.text.strip())
@@ -132,6 +154,9 @@ class BsplayerService:
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search BSPlayer database by 64-bit OSHash or IMDb ID."""
+        if not self.is_available:
+            return []
+
         if not video_meta.moviehash and not video_meta.imdb_id:
             LOG.debug("BSPlayer requires movie hash or IMDb ID for lookup. Skipping.")
             return []
@@ -223,12 +248,28 @@ class BsplayerService:
             "Connection": "close",
         }
 
-        BSPLAYER_LIMITER.acquire()
-        response = SESSION.get(subtitle.download_url, headers=headers, timeout=DEFAULT_TIMEOUT)
-        if response.status_code != 200:
-            status = response.status_code
-            snippet = response.text[:100]
-            raise RuntimeError(f"BSPlayer download failed with status {status}: {snippet}")
+        response: httpx.Response | None = None
+        for attempt in range(3):
+            BSPLAYER_LIMITER.acquire()
+            try:
+                response = SESSION.get(
+                    subtitle.download_url,
+                    headers=headers,
+                )
+                if response.status_code != 200:
+                    status = response.status_code
+                    snippet = response.text[:100]
+                    raise RuntimeError(f"BSPlayer download failed with status {status}: {snippet}")
+                break
+            except httpx.RequestError as exc:
+                if attempt == 2:
+                    raise
+                backoff_delay = 0.5 * (2**attempt)
+                LOG.debug(f"BSPlayer network error ({exc}), retrying in {backoff_delay:.1f}s...")
+                time.sleep(backoff_delay)
+
+        if response is None:
+            raise RuntimeError("BSPlayer download request failed.")
 
         content_bytes = response.content
         if not content_bytes or response.text.strip() == "500":

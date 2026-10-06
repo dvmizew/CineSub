@@ -44,6 +44,28 @@ from cinesub.core.logger import LOG
 from cinesub.core.models import VideoMetadata
 
 
+class InterruptedOperationError(KeyboardInterrupt):
+    """Raised when an operation is cancelled via SIGINT / KeyboardInterrupt,
+    carrying partial progress.
+    """
+
+    def __init__(self, partial_result: Any = None) -> None:
+        super().__init__()
+        self.partial_result = partial_result
+
+
+def is_interruption(exc: BaseException) -> bool:
+    """Return True if an exception represents a SIGINT/Ctrl+C user cancellation,
+    including threading Condition lock release errors triggered during signal interrupts.
+    """
+    if isinstance(exc, (KeyboardInterrupt, InterruptedOperationError)):
+        return True
+    if isinstance(exc, RuntimeError) and "release unlocked lock" in str(exc):
+        return True
+    context = getattr(exc, "__context__", None)
+    return bool(context and isinstance(context, KeyboardInterrupt))
+
+
 def normalize_language(lang: str) -> str:
     """Normalize language code or name to standard 2-letter ISO 639-1 code."""
     cleaned = lang.strip().lower()
