@@ -140,7 +140,7 @@ class BetaSeriesService:
             results.sort(key=lambda m: m.score, reverse=True)
             return results
 
-        except Exception as exc:
+        except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"BetaSeries search error for {video_meta.title}: {exc}")
             return []
 

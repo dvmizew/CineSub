@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cinesub"
 version = "0.2.0"
-description = "Automated subtitle searching, downloading, and audio-based synchronization CLI"
+description = "Automated subtitle searching, downloading, and media library management CLI"
 readme = "README.md"
 authors = [
     { name = "Daniel Radu" }
 ]
 license = "MIT"
 requires-python = ">=3.10"
-keywords = ["subtitles", "srt", "ffsubsync", "opensubtitles", "subdl", "movies", "tv-shows", "sync", "cli"]
+keywords = ["subtitles", "srt", "opensubtitles", "subdl", "subsource", "subsro", "betaseries", "tmdb", "movies", "tv-shows", "cli"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -40,9 +40,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-sync = [
-    "ffsubsync>=0.4.25",
-]
 dev = [
     "pytest>=8.0.0",
     "pytest-mock>=3.12.0",

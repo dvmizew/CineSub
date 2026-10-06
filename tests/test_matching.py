@@ -5,8 +5,11 @@ from pathlib import Path
 from cinesub.core.models import VideoMetadata
 from cinesub.core.utils import (
     decode_and_normalize_subtitle_content,
+    evaluate_local_subtitle_score,
+    get_subtitle_max_timestamp,
     parse_video_metadata,
     score_subtitle_candidate,
+    validate_subtitle_timing,
 )
 
 
@@ -748,3 +751,144 @@ def test_comprehensive_scene_and_p2p_group_clusters(tmp_path: Path) -> None:
     meta_playhd = parse_video_metadata(f_playhd, compute_hash=False)
     score_rosub = score_subtitle_candidate(meta_playhd, "Umbre.S03E01.1080p.HBO.WEB-DL.x264-ROsub")
     assert score_rosub > score_other
+
+
+def test_short_title_scoring_and_gatekeeper(tmp_path: Path) -> None:
+    """Validate strict gatekeeping and penalties for short titles (<= 5 characters)."""
+    # 1. Title 'Up' (2009)
+    f_up = tmp_path / "Up.2009.1080p.BluRay.x264-SPARKS.mkv"
+    f_up.write_bytes(b"\x00" * 131072)
+    meta_up = parse_video_metadata(f_up, compute_hash=False)
+
+    # Valid match
+    score_valid_up = score_subtitle_candidate(meta_up, "Up.2009.1080p.BluRay.x264-ROVERS")
+    assert score_valid_up > 0.0
+
+    # False-positive substring in middle: 'Stand Up Guys'
+    score_stand_up = score_subtitle_candidate(meta_up, "Stand.Up.Guys.2012.1080p.BluRay.x264")
+    assert score_stand_up == 0.0
+
+    # False-positive word containing 'up': 'Superbad'
+    score_superbad = score_subtitle_candidate(meta_up, "Superbad.2007.1080p.BluRay.x264")
+    assert score_superbad == 0.0
+
+    # 2. Title '9' (2009)
+    f_nine = tmp_path / "9.2009.1080p.BluRay.x264.mkv"
+    f_nine.write_bytes(b"\x00" * 131072)
+    meta_nine = parse_video_metadata(f_nine, compute_hash=False)
+
+    score_valid_nine = score_subtitle_candidate(meta_nine, "9.2009.1080p.BluRay.x264")
+    assert score_valid_nine > 0.0
+
+    # False-positive with preceding title: 'District 9'
+    score_district_9 = score_subtitle_candidate(meta_nine, "District.9.2009.1080p.BluRay.x264")
+    assert score_district_9 == 0.0
+
+    # 3. Title 'Hero' (1992 vs 2002)
+    f_hero_1992 = tmp_path / "Hero.1992.1080p.WEBRip.x264.mp4"
+    f_hero_1992.write_bytes(b"\x00" * 131072)
+    meta_hero_1992 = parse_video_metadata(f_hero_1992, compute_hash=False)
+
+    score_hero_1992 = score_subtitle_candidate(meta_hero_1992, "Hero.1992.1080p.WEBRip.x264")
+    assert score_hero_1992 > 0.0
+
+    score_hero_2002 = score_subtitle_candidate(meta_hero_1992, "Hero.2002.1080p.BluRay.x264")
+    assert score_hero_2002 == 0.0
+
+
+def test_video_duration_and_timing_invariants() -> None:
+    """Validate subtitle timestamp extraction and video duration timing bounds."""
+    srt_content = (
+        "1\n00:00:10,000 --> 00:00:15,000\nHello world!\n\n"
+        "2\n01:30:00,000 --> 01:30:10,500\nThe end.\n"
+    )
+    max_ts = get_subtitle_max_timestamp(srt_content)
+    # 1h 30m 10.5s = 5410.5 seconds
+    assert abs(max_ts - 5410.5) < 0.1
+
+    # Empty subtitle yields 0.0
+    assert get_subtitle_max_timestamp("") == 0.0
+    assert get_subtitle_max_timestamp(b"") == 0.0
+
+    # Invariant 1: Valid alignment (video duration 5415s, within 15s)
+    assert validate_subtitle_timing(max_ts, 5415.0) is True
+
+    # Invariant 2: Overrun (> 15s past video end of 5390s)
+    assert validate_subtitle_timing(max_ts, 5390.0) is False
+
+    # Invariant 3: Drastic early termination (< 70% of video length)
+    assert validate_subtitle_timing(max_ts, 9000.0) is False
+
+    # Invariant 4: Unknown video duration fails open (True)
+    assert validate_subtitle_timing(max_ts, None) is True
+    assert validate_subtitle_timing(max_ts, 0.0) is True
+
+    # Invariant 5: Zero timestamp fails
+    assert validate_subtitle_timing(0.0, 5400.0) is False
+
+
+def test_quality_downgrade_protection(tmp_path: Path) -> None:
+    """Validate evaluation of local existing subtitle quality scores."""
+    f_video = tmp_path / "Inception.2010.1080p.mkv"
+    f_video.write_bytes(b"\x00" * 131072)
+    meta = parse_video_metadata(f_video, compute_hash=False)
+
+    # Empty file has 0 score
+    f_empty = tmp_path / "Inception.2010.1080p.srt"
+    f_empty.write_text("", encoding="utf-8")
+    assert evaluate_local_subtitle_score(f_empty, meta) == 0.0
+
+    # Retail / synced subtitle
+    f_retail = tmp_path / "Inception.2010.1080p.BluRay.ROSub.srt"
+    f_retail.write_text(
+        "1\n00:00:01,000 --> 00:00:04,000\nSubtitrare sincronizata de ROSub Retail\n",
+        encoding="utf-8",
+    )
+    score_retail = evaluate_local_subtitle_score(f_retail, meta)
+    assert score_retail >= 90.0
+
+    # Machine translated subtitle receives penalty
+    f_mt = tmp_path / "Inception.2010.1080p.mt.srt"
+    f_mt.write_text(
+        "1\n00:00:01,000 --> 00:00:04,000\nMachine Translated by Google\n",
+        encoding="utf-8",
+    )
+    score_mt = evaluate_local_subtitle_score(f_mt, meta)
+    assert score_mt < score_retail
+
+
+def test_real_media_library_fine_tuning(tmp_path: Path) -> None:
+    """Fine-tune and verify metadata extraction on real-world filenames.
+
+    Matches media patterns found in local user media libraries.
+    """
+    real_sample_names = [
+        ("Emma..2020.1080p.BluRay.x264.AAC5.1-[YTS.MX].mp4", "Emma", 2020, "YTS.MX"),
+        ("Fathers'.Day.1997.1080p.WEBRip.x264.AAC-[YTS.MX].mp4", "Fathers' Day", 1997, "YTS.MX"),
+        (
+            "James.Vs..His.Future.Self.2019.1080p.WEBRip.x264.AAC5.1-[YTS.MX].mp4",
+            "James Vs His Future Self",
+            2019,
+            "YTS.MX",
+        ),
+        (
+            "Hot.Shots.Part.Deux.1993.1080p.BluRay.x264.AAC-[YTS.MX].mp4",
+            "Hot Shots Part Deux",
+            1993,
+            "YTS.MX",
+        ),
+        ("Abe.2019.1080p.WEBRip.x264.AAC5.1-[YTS.MX].mp4", "Abe", 2019, "YTS.MX"),
+        ("Ill.Be.There.2003.1080p.WEBRip.x264.AAC-[YTS.MX].mp4", "Ill Be There", 2003, "YTS.MX"),
+    ]
+
+    for fname, expected_title, expected_year, expected_group in real_sample_names:
+        f = tmp_path / fname
+        f.write_bytes(b"\x00" * 131072)
+        meta = parse_video_metadata(f, compute_hash=False)
+        assert meta.title.lower() == expected_title.lower(), (
+            f"Mismatch for {fname}: got {meta.title}"
+        )
+        assert meta.year == expected_year, f"Year mismatch for {fname}: got {meta.year}"
+        assert meta.release_group == expected_group, (
+            f"Group mismatch for {fname}: got {meta.release_group}"
+        )

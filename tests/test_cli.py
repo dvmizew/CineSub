@@ -27,7 +27,7 @@ def test_cli_config(capsys) -> None:
 
 def test_cli_sync(sample_video_file: Path, capsys) -> None:
     mock_report = {
-        "command": "sync",
+        "command": "download",
         "total_files": 1,
         "successful": 1,
         "failed": 0,
@@ -43,29 +43,31 @@ def test_cli_sync(sample_video_file: Path, capsys) -> None:
                     "language": "en",
                     "release_name": "Inception.1080p.SPARKS",
                     "matched_by_hash": True,
+                    "score": 95.0,
                     "saved_path": str(sample_video_file.with_suffix(".srt")),
-                },
-                "sync": {
-                    "success": True,
-                    "offset_seconds": -0.350,
                 },
                 "status": "success",
             }
         ],
     }
 
-    with patch("cinesub.cli.main.download_and_sync_batch", return_value=mock_report):
-        app(["sync", str(sample_video_file), "-l", "en"])
+    with patch("cinesub.cli.main.download_batch", return_value=mock_report):
+        app(["download", str(sample_video_file), "-l", "en"])
         captured = capsys.readouterr()
         assert "Subtitle Download Complete" in captured.out
         assert "Inception" in captured.out
-        assert "-0.350s" in captured.out
+        assert "95.0" in captured.out
+
+        # Verify backward-compatible 'sync' alias
+        app(["sync", str(sample_video_file), "-l", "en"])
+        captured_alias = capsys.readouterr()
+        assert "Subtitle Download Complete" in captured_alias.out
 
 
 def test_cli_sync_json_and_threads(tmp_path: Path, sample_video_file: Path, capsys) -> None:
     json_out = tmp_path / "sync_report.json"
     mock_report = {
-        "command": "sync",
+        "command": "download",
         "total_files": 1,
         "successful": 1,
         "failed": 0,
@@ -77,8 +79,8 @@ def test_cli_sync_json_and_threads(tmp_path: Path, sample_video_file: Path, caps
         ],
     }
 
-    with patch("cinesub.cli.main.download_and_sync_batch", return_value=mock_report) as mock_fn:
-        app(["sync", str(sample_video_file), "-l", "ro", "-t", "8", "-j", str(json_out)])
+    with patch("cinesub.cli.main.download_batch", return_value=mock_report) as mock_fn:
+        app(["download", str(sample_video_file), "-l", "ro", "-t", "8", "-j", str(json_out)])
         mock_fn.assert_called_once()
         _, kwargs = mock_fn.call_args
         assert kwargs["threads"] == 8
@@ -87,7 +89,7 @@ def test_cli_sync_json_and_threads(tmp_path: Path, sample_video_file: Path, caps
 
 def test_cli_dry_run_sync(sample_video_file: Path, capsys) -> None:
     mock_report = {
-        "command": "sync",
+        "command": "download",
         "dry_run": True,
         "total_files": 1,
         "successful": 0,
@@ -105,20 +107,16 @@ def test_cli_dry_run_sync(sample_video_file: Path, capsys) -> None:
                     "language": "ro",
                     "release_name": "Inception.1080p.SPARKS",
                     "matched_by_hash": True,
+                    "score": 90.0,
                     "saved_path": str(sample_video_file.with_suffix(".srt")),
-                },
-                "sync": {
-                    "success": True,
-                    "offset_seconds": 0.0,
-                    "message": "Simulated (Dry Run)",
                 },
                 "status": "dry_run",
             }
         ],
     }
 
-    with patch("cinesub.cli.main.download_and_sync_batch", return_value=mock_report) as mock_fn:
-        app(["sync", str(sample_video_file), "-l", "ro", "--dry-run"])
+    with patch("cinesub.cli.main.download_batch", return_value=mock_report) as mock_fn:
+        app(["download", str(sample_video_file), "-l", "ro", "--dry-run"])
         mock_fn.assert_called_once()
         _, kwargs = mock_fn.call_args
         assert kwargs["dry_run"] is True
@@ -169,7 +167,7 @@ def test_cli_bulk(sample_video_file: Path, capsys) -> None:
 def test_save_report_json_and_jsonl(tmp_path: Path) -> None:
     report_data = {
         "timestamp": "2026-08-31T12:00:00Z",
-        "command": "sync",
+        "command": "download",
         "dry_run": False,
         "total_files": 2,
         "successful": 2,
@@ -187,7 +185,7 @@ def test_save_report_json_and_jsonl(tmp_path: Path) -> None:
     json_p = tmp_path / "report.json"
     save_report_output(report_data, json_p)
     assert json_p.is_file()
-    assert b'"command": "sync"' in json_p.read_bytes()
+    assert b'"command": "download"' in json_p.read_bytes()
 
     jsonl_p = tmp_path / "report.jsonl"
     save_report_output(report_data, jsonl_p)

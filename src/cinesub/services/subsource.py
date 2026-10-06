@@ -189,7 +189,7 @@ class SubsourceService:
             results.sort(key=lambda match: match.score, reverse=True)
             return results
 
-        except Exception as exc:
+        except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"SubSource search error: {exc}")
             return []
 

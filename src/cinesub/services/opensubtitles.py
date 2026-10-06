@@ -99,7 +99,7 @@ class OpenSubtitlesService:
                     if m.file_id not in seen_file_ids:
                         seen_file_ids.add(m.file_id)
                         matches.append(m)
-            except Exception as exc:
+            except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
                 LOG.debug(f"OpenSubtitles hash search error: {exc}")
 
         try:
@@ -130,7 +130,7 @@ class OpenSubtitlesService:
                 if m.file_id not in seen_file_ids:
                     seen_file_ids.add(m.file_id)
                     matches.append(m)
-        except Exception as exc:
+        except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"OpenSubtitles query search error: {exc}")
 
         matches.sort(key=lambda m: m.score, reverse=True)
@@ -204,7 +204,7 @@ class OpenSubtitlesService:
         if ticket_resp.status_code == 406:
             try:
                 msg = orjson.loads(ticket_resp.content).get("message", "Download quota exceeded")
-            except Exception:
+            except orjson.JSONDecodeError:
                 msg = "Download quota exceeded"
             raise RuntimeError(f"OpenSubtitles download quota exhausted: {msg}")
 

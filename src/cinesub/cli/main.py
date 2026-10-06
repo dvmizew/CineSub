@@ -15,7 +15,7 @@ from cinesub.core.constants import DEFAULT_LANGUAGE, DEFAULT_TIMEOUT, IGNORED_DI
 from cinesub.core.logger import CONSOLE, LOG
 from cinesub.core.models import VideoMetadata
 from cinesub.core.utils import find_video_files, parse_directory_metadata, parse_video_metadata
-from cinesub.modules.downloader import download_and_sync_batch, download_bulk_batch
+from cinesub.modules.downloader import download_batch, download_bulk_batch
 from cinesub.modules.extractor import extract_embedded_subtitles_batch
 from cinesub.services.tmdb import TmdbService
 
@@ -26,7 +26,7 @@ app = App(
     version=__version__,
     version_flags=["--version", "-v"],
     help_flags=["--help", "-h"],
-    help="CineSub - Subtitle searching, downloading, and audio-based synchronization.",
+    help="CineSub - Automated subtitle searching, downloading, and media management CLI.",
     result_action="return_value",
 )
 
@@ -75,8 +75,8 @@ def _render_stats_card(
     CONSOLE.print()
 
 
-@app.command
-def sync(
+@app.command(name="download", alias="sync")
+def download(
     path: Annotated[
         Path,
         Parameter(
@@ -96,7 +96,10 @@ def sync(
         str,
         Parameter(
             name=["--provider", "-p"],
-            help="Provider to search: 'all', 'opensubtitles', 'subdl', or 'subsource'.",
+            help=(
+                "Provider to search: 'all', 'opensubtitles', 'subdl', 'subsource', "
+                "'subsro', or 'betaseries'."
+            ),
         ),
     ] = "all",
     threads: Annotated[
@@ -113,27 +116,6 @@ def sync(
             help="Save structured report to a JSON or JSONL file.",
         ),
     ] = None,
-    sync_audio: Annotated[
-        bool,
-        Parameter(
-            name=["--sync", "-s"],
-            help="Perform audio waveform synchronization with ffsubsync.",
-        ),
-    ] = False,
-    backup: Annotated[
-        bool,
-        Parameter(
-            name=["--backup", "-b"],
-            help="Keep original unsynchronized subtitle copy (*.orig.srt).",
-        ),
-    ] = False,
-    engine: Annotated[
-        str,
-        Parameter(
-            name=["--engine", "-e"],
-            help="Audio synchronization engine: 'ffsubsync' or 'alass'.",
-        ),
-    ] = "ffsubsync",
     force: Annotated[
         bool,
         Parameter(
@@ -163,20 +145,17 @@ def sync(
         ),
     ] = False,
 ) -> dict:
-    """Download the single best subtitle and optionally synchronize it to audio dialogue."""
+    """Download the highest-scoring matching subtitles for video files."""
     LOG.verbose = verbose
 
     try:
-        report = download_and_sync_batch(
+        report = download_batch(
             target_path=path,
             language=language,
             provider=provider,
-            do_sync=sync_audio,
-            keep_backup=backup,
             force=force,
             threads=threads,
             json_path=json_report,
-            sync_engine=engine,
             use_lang_suffix=lang_suffix,
             dry_run=dry_run,
         )
@@ -189,7 +168,6 @@ def sync(
         if len(results) == 1 and results[0].get("status") in ("success", "skipped", "dry_run"):
             single_result = results[0]
             matched_subtitle = single_result.get("subtitle", {})
-            audio_sync_details = single_result.get("sync", {})
             file_status = single_result.get("status")
 
             if file_status == "dry_run":
@@ -225,15 +203,12 @@ def sync(
             )
             table.add_row("Subtitle Release", matched_subtitle.get("release_name", ""))
             table.add_row("Language", matched_subtitle.get("language", "").upper())
+            score_num = matched_subtitle.get("score")
+            table.add_row(
+                "Match Score",
+                f"{score_num:.1f}" if score_num is not None else "100.0",
+            )
             table.add_row("Target SRT Path", matched_subtitle.get("saved_path", ""))
-
-            if audio_sync_details.get("success"):
-                offset_val = audio_sync_details.get("offset_seconds")
-                offset_str = f"{offset_val:+.3f}s" if offset_val is not None else "Aligned"
-                table.add_row("Audio Sync", f"[bold green]Active ({offset_str})[/bold green]")
-            else:
-                msg = audio_sync_details.get("message", "Disabled")
-                table.add_row("Audio Sync", f"[dim]{msg}[/dim]")
 
             CONSOLE.print(table)
             if file_status != "dry_run":
@@ -245,7 +220,7 @@ def sync(
                 CONSOLE.print(f"\n[bold yellow]⚡ Simulated target path:[/] {simulated_path}\n")
         else:
             dashboard_title = (
-                "⚡ CineSub Dry-Run Simulation" if dry_run else "✓ CineSub Synchronization Summary"
+                "⚡ CineSub Dry-Run Simulation" if dry_run else "✓ CineSub Download Summary"
             )
             _render_stats_card(
                 title=dashboard_title,
@@ -263,29 +238,27 @@ def sync(
             table.add_column("Status", justify="center")
             table.add_column("Video File", style="white")
             table.add_column("Provider", style="cyan")
-            table.add_column("Details", style="green")
+            table.add_column("Score / Details", style="green")
 
             for result_entry in results:
                 file_status = result_entry.get("status")
                 if file_status == "success":
                     matched_subtitle = result_entry.get("subtitle", {})
-                    audio_sync_details = result_entry.get("sync", {})
-                    offset_val = audio_sync_details.get("offset_seconds")
-                    offset_str = f"{offset_val:+.2f}s" if offset_val is not None else "OK"
+                    score_num = matched_subtitle.get("score", 0.0)
                     table.add_row(
                         "[bold green]SUCCESS[/bold green]",
                         result_entry.get("video_file"),
                         matched_subtitle.get("provider", "").upper(),
-                        offset_str,
+                        f"Score: {score_num:.1f}",
                     )
                 elif file_status == "dry_run":
                     matched_subtitle = result_entry.get("subtitle", {})
-                    score_val = f"Score: {matched_subtitle.get('score', 0):.1f}"
+                    score_num = matched_subtitle.get("score", 0.0)
                     table.add_row(
                         "[bold yellow]DRY-RUN[/bold yellow]",
                         result_entry.get("video_file"),
                         matched_subtitle.get("provider", "").upper(),
-                        score_val,
+                        f"Score: {score_num:.1f}",
                     )
                 elif file_status == "skipped":
                     matched_subtitle = result_entry.get("subtitle", {})
@@ -311,6 +284,10 @@ def sync(
     except Exception as exc:
         LOG.error(str(exc))
         return {"status": "error", "error": str(exc)}
+
+
+# Backward compatibility alias
+sync = download
 
 
 @app.command
@@ -554,24 +531,16 @@ def config() -> None:
     ffmpeg_status = (
         "[green]Installed & Found in PATH[/green]"
         if ffmpeg_ok
-        else "[yellow]Not Found (Required for ffsubsync)[/yellow]"
+        else "[yellow]Not Found (Required for cinesub extract)[/yellow]"
     )
-    table.add_row("FFmpeg (ffsubsync)", ffmpeg_status)
+    table.add_row("FFmpeg (Subtitle Extraction)", ffmpeg_status)
 
     ffprobe_status = (
         "[green]Installed & Found in PATH[/green]"
         if ffprobe_ok
         else "[yellow]Not Found (Required for cinesub extract)[/yellow]"
     )
-    table.add_row("FFprobe (Embedded Subs)", ffprobe_status)
-
-    alass_bin = shutil.which("alass") or shutil.which("alass-cli")
-    alass_status = (
-        "[green]Installed & Found in PATH[/green]"
-        if alass_bin
-        else "[dim]Optional (Rust binary not in PATH)[/dim]"
-    )
-    table.add_row("Alass Engine", alass_status)
+    table.add_row("FFprobe (Metadata Inspection)", ffprobe_status)
 
     CONSOLE.print(table)
     CONSOLE.print()

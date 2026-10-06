@@ -21,6 +21,7 @@ class VideoMetadata:
     file_size: int = 0
     imdb_id: str | None = None
     tmdb_id: int | None = None
+    duration: float | None = None
 
 
 @dataclass
@@ -36,14 +37,5 @@ class SubtitleMatch:
     download_count: int | None = None
     hearing_impaired: bool = False
     fps: float | str | None = None
+    duration_seconds: float | None = None
     score: float = 0.0
-
-
-@dataclass
-class SyncResult:
-    success: bool
-    video_path: Path
-    srt_path: Path
-    offset_seconds: float | None = None
-    framerate_scale: float | None = None
-    message: str = ""

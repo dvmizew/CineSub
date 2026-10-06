@@ -3,10 +3,13 @@ from __future__ import annotations
 import io
 import os
 import re
+import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 from typing import Any
 
+import orjson
 import srt
 from babelfish import Error as BabelfishError
 from babelfish import Language
@@ -16,6 +19,8 @@ from rapidfuzz import fuzz
 
 from cinesub.core.constants import (
     IGNORED_DIRS,
+    MAX_SUBTITLE_DURATION_TOLERANCE_SECONDS,
+    MIN_SUBTITLE_DURATION_RATIO,
     SCORE_BASE,
     SCORE_CODEC_MATCH,
     SCORE_HASH_MATCH_BASE,
@@ -24,6 +29,7 @@ from cinesub.core.constants import (
     SCORE_RELEASE_GROUP_WEIGHT,
     SCORE_RESOLUTION_MATCH,
     SCORE_SOURCE_MATCH,
+    SHORT_TITLE_MAX_LENGTH,
     SUBTITLE_EXTENSIONS,
     SUPPORTED_VIDEO_EXTS,
     ZIP_MAGIC_BYTES,
@@ -39,8 +45,11 @@ def normalize_language(lang: str) -> str:
     converters = (Language.fromalpha2, Language.fromalpha3b, Language.fromname)
     for converter in converters:
         try:
-            return str(converter(cleaned).alpha2)
-        except (ValueError, LookupError, AttributeError, BabelfishError):
+            converted = converter(cleaned)
+            alpha2_code = getattr(converted, "alpha2", None)
+            if alpha2_code:
+                return str(alpha2_code)
+        except (ValueError, LookupError, BabelfishError):
             pass
 
     return cleaned[:2]
@@ -485,12 +494,171 @@ def _extract_metadata_from_guess(guess: dict[str, Any], fallback_title: str) -> 
     }
 
 
-def parse_video_metadata(video_path: str | Path, compute_hash: bool = True) -> VideoMetadata:
-    """Extract structured video metadata using guessit and calculate the video hash.
+def _parse_sexagesimal_seconds(duration_str: str) -> float | None:
+    parts = duration_str.strip().split(":")
+    try:
+        if len(parts) == 3:
+            return float(parts[0]) * 3600.0 + float(parts[1]) * 60.0 + float(parts[2])
+        if len(parts) == 2:
+            return float(parts[0]) * 60.0 + float(parts[1])
+        return float(duration_str)
+    except (ValueError, TypeError):
+        return None
+
+
+def get_video_duration(video_path: Path | str) -> float | None:
+    """Extract total video duration in seconds using ffprobe across MP4, MKV, and AVI containers."""
+    path = Path(video_path).resolve()
+    ffprobe_bin = shutil.which("ffprobe")
+    if not ffprobe_bin or not path.is_file():
+        return None
+
+    cmd = [
+        ffprobe_bin,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "format=duration:stream=duration:stream_tags=DURATION,DURATION-eng",
+        "-of",
+        "json",
+        str(path),
+    ]
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        payload = orjson.loads(proc.stdout)
+    except (subprocess.SubprocessError, orjson.JSONDecodeError, OSError):
+        return None
+
+    format_dur = payload.get("format", {}).get("duration")
+    if format_dur and format_dur != "N/A":
+        try:
+            return float(format_dur)
+        except ValueError:
+            pass
+
+    streams = payload.get("streams", [])
+    if streams and isinstance(streams, list):
+        v_stream = streams[0]
+        stream_dur = v_stream.get("duration")
+        if stream_dur and stream_dur != "N/A":
+            try:
+                return float(stream_dur)
+            except ValueError:
+                pass
+
+        tags = v_stream.get("tags") or {}
+        tag_dur = tags.get("DURATION") or tags.get("DURATION-eng")
+        if tag_dur:
+            parsed = _parse_sexagesimal_seconds(str(tag_dur))
+            if parsed is not None:
+                return parsed
+
+    return None
+
+
+def get_subtitle_max_timestamp(subtitle_content: str | bytes) -> float:
+    """Return maximum end timestamp in seconds across all cues in subtitle text, or 0.0 if empty."""
+    if isinstance(subtitle_content, bytes):
+        try:
+            text = subtitle_content.decode("utf-8", errors="replace")
+        except UnicodeDecodeError:
+            return 0.0
+    else:
+        text = subtitle_content
+
+    if not text.strip():
+        return 0.0
+
+    try:
+        return max(
+            (cue.end.total_seconds() for cue in srt.parse(text)),
+            default=0.0,
+        )
+    except (srt.SRTParseError, ValueError, TypeError):
+        return 0.0
+
+
+def validate_subtitle_timing(
+    subtitle_max_timestamp: float,
+    video_duration: float | None,
+    tolerance_seconds: float = MAX_SUBTITLE_DURATION_TOLERANCE_SECONDS,
+) -> bool:
+    """Validate subtitle timing against video container duration to prevent cross-movie collisions.
+
+    Returns True if valid or if video duration is unknown.
+    Returns False if subtitle terminates drastically early or extends past video duration.
+    """
+    if video_duration is None or video_duration <= 0.0:
+        return True
+
+    if subtitle_max_timestamp <= 0.0:
+        return False
+
+    discrepancy = subtitle_max_timestamp - video_duration
+    if discrepancy > tolerance_seconds:
+        return False
+
+    min_acceptable_timestamp = max(
+        video_duration * MIN_SUBTITLE_DURATION_RATIO,
+        video_duration - 900.0,
+    )
+    if subtitle_max_timestamp < min_acceptable_timestamp:
+        return False
+
+    return True
+
+
+def evaluate_local_subtitle_score(srt_path: Path, video_meta: VideoMetadata) -> float:
+    """Evaluate quality score of an existing local companion subtitle for downgrade protection."""
+    if not srt_path.is_file() or srt_path.stat().st_size == 0:
+        return 0.0
+
+    score = 75.0
+
+    stem_lower = srt_path.stem.lower()
+    if any(
+        tag in stem_lower
+        for tag in ("retail", "bluray", "web-dl", "netflix", "amazon", "ffsubsync", "alass")
+    ):
+        score += 15.0
+
+    try:
+        content_sample = srt_path.read_bytes()[:65536].decode("utf-8", errors="replace").lower()
+        if any(
+            marker in content_sample
+            for marker in ("machine translated", "google translate", "deepl")
+        ):
+            score -= 50.0
+        elif any(
+            marker in content_sample
+            for marker in ("retail", "blu-ray", "bluray", "subrip", "rosub")
+        ):
+            score += 10.0
+
+        if video_meta.duration and video_meta.duration > 0.0:
+            max_ts = get_subtitle_max_timestamp(content_sample)
+            if validate_subtitle_timing(max_ts, video_meta.duration):
+                score += 10.0
+    except OSError:
+        pass
+
+    return max(0.0, score)
+
+
+def parse_video_metadata(
+    video_path: str | Path,
+    compute_hash: bool = True,
+    extract_duration: bool = False,
+) -> VideoMetadata:
+    """Extract structured media metadata from video filename and parent directory.
 
     Args:
         video_path: Path to target video file.
         compute_hash: Whether to calculate the 64-bit OpenSubtitles hash.
+        extract_duration: Whether to extract video duration via ffprobe.
 
     Returns:
         Populated VideoMetadata object.
@@ -531,6 +699,10 @@ def parse_video_metadata(video_path: str | Path, compute_hash: bool = True) -> V
         except (ValueError, OSError) as exc:
             LOG.debug(f"Could not calculate hash for {filename}: {exc}")
 
+    duration: float | None = None
+    if extract_duration:
+        duration = get_video_duration(path)
+
     return VideoMetadata(
         file_path=path,
         title=extracted["title"],
@@ -545,6 +717,7 @@ def parse_video_metadata(video_path: str | Path, compute_hash: bool = True) -> V
         is_episode=extracted["is_episode"],
         moviehash=moviehash,
         file_size=file_size,
+        duration=duration,
     )
 
 
@@ -593,14 +766,41 @@ def score_subtitle_candidate(
     """Calculate candidate relevance score using rapidfuzz string matching.
 
     Exact hash matches receive top priority (score >= 100).
+    Applies strict gatekeeping and penalties for short titles (<= 5 characters)
+    to prevent false-positive fuzzy collisions.
     """
     download_bonus = min(float(downloads or 0) / 100.0, SCORE_MAX_DOWNLOAD_BONUS)
 
     if matched_by_hash:
         return SCORE_HASH_MATCH_BASE + download_bonus
 
-    score = SCORE_BASE
     rel_lower = release_name.lower()
+
+    # Short-string gatekeeper for titles <= 5 characters (e.g. Up, Her, It, 9, Abe, Coda, Hero)
+    clean_title = video_meta.title.strip().lower()
+    if clean_title and len(clean_title) <= SHORT_TITLE_MAX_LENGTH:
+        boundary_pattern = rf"(?i)(?<![a-z0-9]){re.escape(clean_title)}(?![a-z0-9])"
+        if not re.search(boundary_pattern, rel_lower):
+            return 0.0
+
+        # Anchor check: stem before the short title must not contain unrelated movie title words
+        stem_without_brackets = re.sub(r"^\[[^\]]+\]\s*", "", rel_lower).strip()
+        match_anchor = re.search(boundary_pattern, stem_without_brackets)
+        if match_anchor:
+            prefix = stem_without_brackets[: match_anchor.start()].strip(" ._-")
+            prefix_tokens = [
+                t for t in re.findall(r"[a-z0-9]+", prefix) if t not in ("the", "a", "an")
+            ]
+            if prefix_tokens:
+                return 0.0
+
+        # Release year alignment: if candidate has a 4-digit year, it must match video_meta.year
+        if video_meta.year:
+            candidate_years = [int(y) for y in re.findall(r"\b(19\d\d|20\d\d)\b", rel_lower)]
+            if candidate_years and video_meta.year not in candidate_years:
+                return 0.0
+
+    score = SCORE_BASE
 
     if video_meta.release_group:
         target_release_group = video_meta.release_group.lower().strip()
@@ -657,15 +857,18 @@ def has_existing_subtitle(video_path: str | Path, language: str | None = None) -
             ]
         )
         try:
-            lang_3b = str(Language.fromalpha2(lang_clean).alpha3b)
-            candidates.extend(
-                [
-                    parent_dir / f"{video_stem}.{lang_3b}.srt",
-                    parent_dir / f"{video_stem}.{lang_3b}.sdh.srt",
-                    parent_dir / f"{video_stem}.{lang_3b}.forced.srt",
-                ]
-            )
-        except (ValueError, LookupError, AttributeError, BabelfishError):
+            converted_lang = Language.fromalpha2(lang_clean)
+            alpha3b_code = getattr(converted_lang, "alpha3b", None)
+            if alpha3b_code:
+                lang_3b = str(alpha3b_code)
+                candidates.extend(
+                    [
+                        parent_dir / f"{video_stem}.{lang_3b}.srt",
+                        parent_dir / f"{video_stem}.{lang_3b}.sdh.srt",
+                        parent_dir / f"{video_stem}.{lang_3b}.forced.srt",
+                    ]
+                )
+        except (ValueError, LookupError, BabelfishError):
             pass
 
     for candidate_path in candidates:

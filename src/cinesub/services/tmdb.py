@@ -106,7 +106,7 @@ class TmdbService:
                 return None
 
             return results[0]
-        except Exception as exc:
+        except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"TMDb movie search error: {exc}")
             return None
 
@@ -130,7 +130,7 @@ class TmdbService:
                 return None
 
             return results[0]
-        except Exception as exc:
+        except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"TMDb TV search error: {exc}")
             return None
 
@@ -145,7 +145,7 @@ class TmdbService:
             if resp.status_code != 200:
                 return {}
             return orjson.loads(resp.content)
-        except Exception as exc:
+        except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"TMDb external IDs error: {exc}")
             return {}
 
@@ -193,7 +193,7 @@ class TmdbService:
                 content=orjson.dumps(payload),
             )
             return resp.status_code in (200, 201)
-        except Exception as exc:
+        except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.error(f"Failed adding media {media_id} to TMDb favorites: {exc}")
             return False
 
@@ -218,6 +218,6 @@ class TmdbService:
                 content=orjson.dumps(payload),
             )
             return resp.status_code in (200, 201)
-        except Exception as exc:
+        except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.error(f"Failed adding media {media_id} to TMDb watchlist: {exc}")
             return False
