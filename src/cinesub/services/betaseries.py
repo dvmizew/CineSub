@@ -1,5 +1,3 @@
-"""BetaSeries REST API v3.0 Client for TV Series and Movie Subtitles."""
-
 from __future__ import annotations
 
 import os
@@ -15,9 +13,8 @@ from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import BETASERIES_LIMITER
 from cinesub.core.utils import (
-    decode_and_normalize_subtitle_content,
-    extract_best_subtitle_from_archive,
     normalize_language,
+    save_subtitle_to_disk,
     score_subtitle_candidate,
 )
 from cinesub.services.tmdb import TmdbService
@@ -244,20 +241,4 @@ class BetaSeriesService:
                 f"BetaSeries download failed with status {resp.status_code}: {resp.text[:100]}"
             )
 
-        content_bytes = resp.content
-        if not content_bytes:
-            raise ValueError("BetaSeries returned empty response payload.")
-
-        raw_srt_bytes = extract_best_subtitle_from_archive(
-            archive_bytes=content_bytes,
-            target_stem=destination.stem,
-        )
-        normalized_bytes = decode_and_normalize_subtitle_content(raw_srt_bytes)
-
-        # Atomic POSIX write directly into video's parent directory
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temp_file = destination.parent / f".{destination.name}.tmp"
-        temp_file.write_bytes(normalized_bytes)
-        temp_file.replace(destination)
-
-        return destination
+        return save_subtitle_to_disk(resp.content, destination)

@@ -1,5 +1,3 @@
-"""SubDL.com REST API Client."""
-
 from __future__ import annotations
 
 import os
@@ -19,8 +17,7 @@ from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import SUBDL_LIMITER
 from cinesub.core.utils import (
-    decode_and_normalize_subtitle_content,
-    extract_best_subtitle_from_archive,
+    save_subtitle_to_disk,
     score_subtitle_candidate,
 )
 
@@ -156,11 +153,4 @@ class SubdlService:
         resp = self._send_request("GET", subtitle.download_url, params=download_params)
         resp.raise_for_status()
 
-        raw_bytes = extract_best_subtitle_from_archive(resp.content, destination.stem)
-        clean_bytes = decode_and_normalize_subtitle_content(raw_bytes)
-
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temp_dest = destination.parent / f".{destination.name}.tmp"
-        temp_dest.write_bytes(clean_bytes)
-        temp_dest.replace(destination)
-        return destination
+        return save_subtitle_to_disk(resp.content, destination)

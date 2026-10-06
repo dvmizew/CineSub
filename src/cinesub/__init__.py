@@ -1,5 +1,3 @@
-"""CineSub - Subtitle search, download, and media management CLI."""
-
 from importlib.metadata import PackageNotFoundError, version
 
 try:

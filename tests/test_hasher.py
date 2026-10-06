@@ -1,5 +1,3 @@
-"""Tests for 64-bit movie hash calculation."""
-
 from __future__ import annotations
 
 from pathlib import Path

@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import gzip
 import io
+import lzma
 import zipfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import httpx
 import pytest
 
 from cinesub.core.models import SubtitleMatch, VideoMetadata
+from cinesub.modules.downloader import get_active_services
+from cinesub.services.animetosho import AnimeToshoService
+from cinesub.services.assrt import AssrtService
 from cinesub.services.betaseries import BetaSeriesService
+from cinesub.services.bsplayer import BsplayerService
+from cinesub.services.gestdown import GestdownService
 from cinesub.services.opensubtitles import OpenSubtitlesService
 from cinesub.services.subdl import SubdlService
 from cinesub.services.subsource import SubsourceService
@@ -683,3 +690,291 @@ def test_rate_limiter_http_429_backoff_and_retry(sample_video_file: Path) -> Non
         assert matches == []
         assert call_count == 2
         mock_cooldown.assert_called_once_with(1.0)
+
+
+def test_gestdown_search_and_download(tmp_path: Path) -> None:
+    service = GestdownService()
+    tv_meta = VideoMetadata(
+        file_path=tmp_path / "Breaking.Bad.S01E01.mkv",
+        title="Breaking Bad",
+        season=1,
+        episode=1,
+        is_episode=True,
+    )
+
+    catalog_payload = {
+        "shows": [
+            {
+                "id": "show-uuid-1",
+                "name": "Breaking Bad",
+                "seasons": [1, 2, 3],
+            }
+        ]
+    }
+    subtitles_payload = {
+        "matchingSubtitles": [
+            {
+                "subtitleId": "sub-uuid-10",
+                "version": "720p.HDTV",
+                "hearingImpaired": False,
+                "downloadCount": 150,
+                "downloadUri": "/subtitles/download/sub-uuid-10",
+            }
+        ]
+    }
+
+    def mock_gestdown_request(method: str, url: str, **kwargs: Any) -> httpx.Response:
+        if "/shows/search" in url:
+            return httpx.Response(200, json=catalog_payload, request=httpx.Request(method, url))
+        if "/subtitles/get" in url:
+            return httpx.Response(200, json=subtitles_payload, request=httpx.Request(method, url))
+        if "/subtitles/download" in url:
+            return httpx.Response(
+                200,
+                content=b"1\n00:00:01,000 --> 00:00:03,000\nGestdown Test Subtitle\n",
+                request=httpx.Request(method, url),
+            )
+        return httpx.Response(404, request=httpx.Request(method, url))
+
+    with patch("cinesub.services.gestdown.SESSION.request", side_effect=mock_gestdown_request):
+        matches = service.search(tv_meta, language="en")
+        assert len(matches) == 1
+        assert matches[0].id == "sub-uuid-10"
+        assert matches[0].provider == "gestdown"
+        assert "720p.HDTV" in matches[0].release_name
+
+        dest_srt = tmp_path / "bb.srt"
+        service.download(matches[0], dest_srt)
+        assert dest_srt.is_file()
+        assert "Gestdown Test Subtitle" in dest_srt.read_text(encoding="utf-8")
+
+
+def test_gestdown_movie_skipped(sample_video_meta: VideoMetadata) -> None:
+    service = GestdownService()
+    # sample_video_meta is not an episode
+    matches = service.search(sample_video_meta, language="en")
+    assert matches == []
+
+
+def test_bsplayer_search_and_download(sample_video_meta: VideoMetadata, tmp_path: Path) -> None:
+    service = BsplayerService(endpoint_url="http://s1.api.bsplayer-subtitles.com/v1.php")
+
+    login_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">'
+        "<SOAP-ENV:Body><return><result>200</result><status>OK</status><data>sess_123</data></return></SOAP-ENV:Body>"
+        "</SOAP-ENV:Envelope>"
+    )
+    search_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">'
+        "<SOAP-ENV:Body><return>"
+        "<result><result>200</result><status>OK</status></result>"
+        "<data>"
+        "<item>"
+        "<subID>9911</subID>"
+        "<subName>Inception.2010.1080p.BluRay.x264.srt</subName>"
+        "<subLang>eng</subLang>"
+        "<subFormat>srt</subFormat>"
+        "<subRating>9.20</subRating>"
+        "<subDownloadLink>http://s1.api.bsplayer-subtitles.com/download.php?id=9911</subDownloadLink>"
+        "</item>"
+        "</data>"
+        "</return></SOAP-ENV:Body>"
+        "</SOAP-ENV:Envelope>"
+    )
+    logout_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">'
+        "<SOAP-ENV:Body><return><result>200</result></return></SOAP-ENV:Body>"
+        "</SOAP-ENV:Envelope>"
+    )
+
+    def mock_post(url: str, **kwargs: Any) -> httpx.Response:
+        content_str = kwargs.get("content", b"").decode("utf-8")
+        if "logIn" in content_str:
+            return httpx.Response(200, text=login_xml, request=httpx.Request("POST", url))
+        if "searchSubtitles" in content_str:
+            return httpx.Response(200, text=search_xml, request=httpx.Request("POST", url))
+        if "logOut" in content_str:
+            return httpx.Response(200, text=logout_xml, request=httpx.Request("POST", url))
+        return httpx.Response(404, request=httpx.Request("POST", url))
+
+    raw_srt_bytes = b"1\n00:00:01,000 --> 00:00:04,000\nBSPlayer Subtitle Content\n"
+    gzipped_bytes = gzip.compress(raw_srt_bytes)
+
+    def mock_get(url: str, **kwargs: Any) -> httpx.Response:
+        if "download.php" in url:
+            return httpx.Response(200, content=gzipped_bytes, request=httpx.Request("GET", url))
+        return httpx.Response(404, request=httpx.Request("GET", url))
+
+    with (
+        patch("cinesub.services.bsplayer.SESSION.post", side_effect=mock_post),
+        patch("cinesub.services.bsplayer.SESSION.get", side_effect=mock_get),
+    ):
+        matches = service.search(sample_video_meta, language="en")
+        assert len(matches) == 1
+        assert matches[0].id == "9911"
+        assert matches[0].provider == "bsplayer"
+        assert matches[0].matched_by_hash is True
+
+        dest_srt = tmp_path / "Inception_bs.srt"
+        service.download(matches[0], dest_srt)
+        assert dest_srt.is_file()
+        assert "BSPlayer Subtitle Content" in dest_srt.read_text(encoding="utf-8")
+
+
+def test_bsplayer_skipped_without_hash_or_imdb(tmp_path: Path) -> None:
+    service = BsplayerService()
+    meta_without_hash = VideoMetadata(
+        file_path=tmp_path / "Unknown.Movie.mp4",
+        title="Unknown Movie",
+        moviehash=None,
+        imdb_id=None,
+    )
+    matches = service.search(meta_without_hash, language="en")
+    assert matches == []
+
+
+def test_animetosho_search_and_download(tmp_path: Path) -> None:
+    service = AnimeToshoService()
+    anime_meta = VideoMetadata(
+        file_path=tmp_path / "[SubsPlease] Frieren - 01 (1080p).mkv",
+        title="Frieren",
+        episode=1,
+        is_episode=True,
+    )
+
+    feed_payload = [
+        {
+            "id": 1234,
+            "title": "[SubsPlease] Sousou no Frieren - 01 (1080p) [7D35515E].mkv",
+            "status": "complete",
+        }
+    ]
+    detail_payload = {
+        "files": [
+            {
+                "filename": "[SubsPlease] Sousou no Frieren - 01 (1080p).mkv",
+                "attachments": [
+                    {
+                        "id": 4321,
+                        "type": "subtitle",
+                        "info": {
+                            "codec": "ASS",
+                            "lang": "eng",
+                            "name": "English subs",
+                            "forced": 0,
+                        },
+                        "size": 100,
+                    }
+                ],
+            }
+        ]
+    }
+
+    ass_content = (
+        b"[Script Info]\n"
+        b"Title: Frieren 01\n"
+        b"[Events]\n"
+        b"Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        b"Dialogue: 0,0:00:01.00,0:00:04.00,Default,,0,0,0,,{\\i1}AnimeTosho Subtitle{\\i0}\n"
+    )
+    xz_compressed_bytes = lzma.compress(ass_content)
+
+    def mock_animetosho_get(url: str, **kwargs: Any) -> httpx.Response:
+        params = kwargs.get("params", {})
+        if "feed.animetosho.org" in url:
+            if params.get("show") == "torrent":
+                return httpx.Response(200, json=detail_payload, request=httpx.Request("GET", url))
+            return httpx.Response(200, json=feed_payload, request=httpx.Request("GET", url))
+        if "storage.animetosho.org" in url:
+            return httpx.Response(
+                200,
+                content=xz_compressed_bytes,
+                request=httpx.Request("GET", url),
+            )
+        return httpx.Response(404, request=httpx.Request("GET", url))
+
+    with patch("cinesub.services.animetosho.SESSION.get", side_effect=mock_animetosho_get):
+        matches = service.search(anime_meta, language="en")
+        assert len(matches) == 1
+        assert matches[0].id == "1234:4321"
+        assert matches[0].provider == "animetosho"
+
+        dest_srt = tmp_path / "frieren.srt"
+        service.download(matches[0], dest_srt)
+        assert dest_srt.is_file()
+        content = dest_srt.read_text(encoding="utf-8")
+        assert "AnimeTosho Subtitle" in content
+
+
+def test_assrt_search_and_download(sample_video_meta: VideoMetadata, tmp_path: Path) -> None:
+    service = AssrtService(api_token="valid_32_char_token_123456789012")
+    assert service.is_configured is True
+
+    search_payload = {
+        "status": 0,
+        "sub": {
+            "subs": [
+                {
+                    "id": 8888,
+                    "native_name": "Inception (2010)",
+                    "videoname": "Inception.2010.1080p.BluRay.x264",
+                    "filename": "Inception.chs.srt",
+                    "url": "https://api.assrt.net/download/8888",
+                    "vote_score": 4.5,
+                    "down_count": 200,
+                    "lang": {
+                        "langlist": {"langeng": True, "langchs": True},
+                    },
+                }
+            ]
+        },
+    }
+
+    raw_srt_bytes = b"1\n00:00:01,000 --> 00:00:03,000\nAssrt Chinese/English Subtitle\n"
+
+    def mock_assrt_get(url: str, **kwargs: Any) -> httpx.Response:
+        if "/sub/search" in url:
+            return httpx.Response(200, json=search_payload, request=httpx.Request("GET", url))
+        if "download/8888" in url:
+            return httpx.Response(200, content=raw_srt_bytes, request=httpx.Request("GET", url))
+        return httpx.Response(404, request=httpx.Request("GET", url))
+
+    with patch("cinesub.services.assrt.SESSION.get", side_effect=mock_assrt_get):
+        matches = service.search(sample_video_meta, language="en")
+        assert len(matches) == 1
+        assert matches[0].id == "8888"
+        assert matches[0].provider == "assrt"
+
+        dest_srt = tmp_path / "assrt_sub.srt"
+        service.download(matches[0], dest_srt)
+        assert dest_srt.is_file()
+        assert "Assrt Chinese/English Subtitle" in dest_srt.read_text(encoding="utf-8")
+
+
+def test_assrt_unconfigured_behavior(sample_video_meta: VideoMetadata) -> None:
+    service = AssrtService(api_token=None)
+    with patch.dict("os.environ", {}, clear=True):
+        assert service.is_configured is False
+        assert service.search(sample_video_meta, language="en") == []
+
+
+def test_get_active_services_all_providers() -> None:
+    active_gestdown = get_active_services("gestdown")
+    assert "gestdown" in active_gestdown
+    assert isinstance(active_gestdown["gestdown"], GestdownService)
+
+    active_bsplayer = get_active_services("bsplayer")
+    assert "bsplayer" in active_bsplayer
+    assert isinstance(active_bsplayer["bsplayer"], BsplayerService)
+
+    active_animetosho = get_active_services("animetosho")
+    assert "animetosho" in active_animetosho
+    assert isinstance(active_animetosho["animetosho"], AnimeToshoService)
+
+    with patch.dict("os.environ", {"ASSRT_API_TOKEN": "mock_token_value"}):
+        active_assrt = get_active_services("assrt")
+        assert "assrt" in active_assrt
+        assert isinstance(active_assrt["assrt"], AssrtService)

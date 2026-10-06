@@ -67,3 +67,15 @@ SUBSRO_LIMITER = RateLimiter(rate=2.0, max_burst=1.0)
 
 # BetaSeries: Safe client rate: 2.0 req/sec.
 BETASERIES_LIMITER = RateLimiter(rate=2.0, max_burst=1.0)
+
+# Gestdown: Addic7ed proxy. Safe client rate: 2.0 req/sec.
+GESTDOWN_LIMITER = RateLimiter(rate=2.0, max_burst=1.0)
+
+# BSPlayer: Hash-based SOAP API. Safe client rate: 2.0 req/sec.
+BSPLAYER_LIMITER = RateLimiter(rate=2.0, max_burst=1.0)
+
+# AnimeTosho: Feed and storage API. Safe client rate: 2.0 req/sec.
+ANIMETOSHO_LIMITER = RateLimiter(rate=2.0, max_burst=1.0)
+
+# Assrt.net: Official limit is 20 req/min (0.33 req/sec). Safe client rate: 0.33 req/sec.
+ASSRT_LIMITER = RateLimiter(rate=0.33, max_burst=1.0)

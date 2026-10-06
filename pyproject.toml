@@ -37,6 +37,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "charset-normalizer>=3.3.0",
     "srt>=3.5.3",
+    "defusedxml>=0.7.1",
 ]
 
 [project.optional-dependencies]

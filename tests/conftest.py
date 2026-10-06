@@ -1,5 +1,3 @@
-"""Shared test fixtures for CineSub."""
-
 from __future__ import annotations
 
 from pathlib import Path

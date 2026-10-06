@@ -20,6 +20,12 @@ SUBSOURCE_API_URL = "https://api.subsource.net/api/v1"
 SUBSRO_API_URL = "https://api.subs.ro/v1.0"
 BETASERIES_API_URL = "https://api.betaseries.com"
 TMDB_API_URL = "https://api.themoviedb.org/3"
+GESTDOWN_API_URL = "https://api.gestdown.info"
+BSPLAYER_API_URL = "http://s1.api.bsplayer-subtitles.com/v1.php"
+ANIMETOSHO_FEED_URL = "https://feed.animetosho.org/json"
+ANIMETOSHO_STORAGE_URL = "https://storage.animetosho.org/attach"
+ASSRT_API_URL = "https://api.assrt.net/v1"
+ASSRT_FALLBACK_URL = "https://api.makedie.me/v1"
 
 SUPPORTED_VIDEO_EXTS = frozenset(
     {
@@ -84,6 +90,7 @@ MIN_VIDEO_SCAN_SIZE = 10 * 1024 * 1024
 
 GZIP_MAGIC_BYTES = b"\x1f\x8b"
 ZIP_MAGIC_BYTES = b"PK\x03\x04"
+XZ_MAGIC_BYTES = b"\xfd7zXZ\x00"
 
 HASH_CHUNK_SIZE = 65536
 MIN_HASH_FILE_SIZE = HASH_CHUNK_SIZE * 2

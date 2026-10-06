@@ -2,7 +2,7 @@
 
 Automated multi-provider subtitle downloader and media library management CLI for movies and TV series.
 
-CineSub searches across top subtitle providers (**OpenSubtitles.com**, **SubDL**, **SubSource**, **Subs.ro**, and **BetaSeries**), matches files using exact 64-bit video hashes (`OSHash`) or release metadata enriched via **TMDb**, validates subtitle timing invariants against video duration, and downloads clean, UTF-8 normalized `.srt` companion subtitles.
+CineSub searches across top subtitle providers (**OpenSubtitles.com**, **SubDL**, **SubSource**, **Subs.ro**, **BetaSeries**, **Gestdown**, **BSPlayer**, **AnimeTosho**, and **Assrt.net**), matches files using exact 64-bit video hashes (`OSHash`) or release metadata enriched via **TMDb**, validates subtitle timing invariants against video duration, and downloads clean, UTF-8 normalized `.srt` companion subtitles.
 
 Supports single video files or batch processing of entire media folders with multithreading and automatic token-bucket rate limiting.
 
@@ -21,20 +21,22 @@ Video File ──► [ 1. Compute 64-bit OSHash ] ──► Exact hash match acr
                      │                          [ 4. Validate & Normalize ]
                      ▼                          • Timing invariant check vs duration
           Query Multi-Provider APIs             • UTF-8 encoding normalization
-          (OS, SubDL, SubSource, Subs.ro, BS)   • Downgrade protection check
-                     │                                   │
-                     ▼                                   ▼
-          Score candidates with RapidFuzz       Atomic POSIX file replace (.srt)
-          & Ecosystem Group Clusters                     │
-                     │                                   ▼
-                     └─────────────────────────► Final Verified Subtitle
+          (OS, SubDL, SubSource, Subs.ro,       • Downgrade protection check
+           BetaSeries, Gestdown, BSPlayer,               │
+           AnimeTosho, Assrt.net)                        ▼
+                     │                          Atomic POSIX file replace (.srt)
+                     ▼                                   │
+          Score candidates with RapidFuzz                ▼
+          & Ecosystem Group Clusters            Final Verified Subtitle
+                     │
+                     └─────────────────────────►
 ```
 
-1. **Exact Hash Match**: Computes the 64-bit checksum over the video header and footer. If found on OpenSubtitles or supported APIs, timing is typically already tailored for that specific encode.
+1. **Exact Hash Match**: Computes the 64-bit checksum over the video header and footer. If found on OpenSubtitles, BSPlayer, or supported APIs, timing is typically already tailored for that specific encode.
 2. **Metadata Fallback & TMDb Enrichment**: If hash matching yields no results, `guessit` extracts media metadata (title, season/episode, release group, source) and enriches it via TMDb to resolve IMDb IDs.
 3. **Multi-Provider Search & Heuristic Scoring**: Subtitle candidates from all active providers are ranked by release group clusters, exact token boundaries, and short-title penalties using `rapidfuzz`.
 4. **Timing Validation & Atomic Writes**: Validates maximum subtitle timestamps against video duration to eliminate cross-movie collisions, and saves `.srt` files using atomic POSIX replacement (`os.replace`).
-5. **Thread-Safe Rate Limiting**: Ensures concurrent batch jobs strictly respect provider thresholds (4.0 req/s OpenSubtitles, 8.0 req/s SubDL, 1.0 req/s SubSource, 2.0 req/s Subs.ro, 2.0 req/s BetaSeries, 4.0 req/s TMDb) with synchronized backoff on HTTP 429.
+5. **Thread-Safe Rate Limiting**: Ensures concurrent batch jobs strictly respect provider thresholds (4.0 req/s OpenSubtitles, 8.0 req/s SubDL, 1.0 req/s SubSource, 2.0 req/s Subs.ro, 2.0 req/s BetaSeries, 2.0 req/s Gestdown, 2.0 req/s BSPlayer, 2.0 req/s AnimeTosho, 0.33 req/s Assrt, 4.0 req/s TMDb) with synchronized backoff on HTTP 429.
 
 ---
 
@@ -71,6 +73,10 @@ pip install -e .
 | **SubSource** | `https://api.subsource.net/api/v1` | [SubSource Account Portal](https://subsource.net) | 1.0 req/s (60 req/min Cap) |
 | **Subs.ro** | `https://api.subs.ro/v1.0` | [Subs.ro API Documentation](https://api.subs.ro) | 2.0 req/s (Safe Client Cap) |
 | **BetaSeries** | `https://api.betaseries.com` | [BetaSeries API Portal](https://www.betaseries.com/api) | 2.0 req/s (Safe Client Cap) |
+| **Gestdown** | `https://api.gestdown.info` | [Gestdown / Addic7ed Proxy](https://api.gestdown.info) | 2.0 req/s (Public, No Key Required) |
+| **BSPlayer** | `http://s1.api.bsplayer-subtitles.com/v1.php` | BSPlayer Community 64-bit SOAP API | 2.0 req/s (Public, No Key Required) |
+| **AnimeTosho** | `https://feed.animetosho.org/json` | [AnimeTosho Feed & Attachments](https://animetosho.org) | 2.0 req/s (Public, No Key Required) |
+| **Assrt.net** | `https://api.assrt.net/v1` | [Assrt.net (Shooter.cn) API](https://assrt.net) | 0.33 req/s (20 req/min Cap) |
 | **TMDb** | `https://api.themoviedb.org/3` | [TMDb Developer Settings](https://developer.themoviedb.org) | 4.0 req/s (Client Cap) |
 
 Create a `.env` file in your working directory or home directory:

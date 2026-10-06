@@ -21,7 +21,11 @@ from cinesub.core.utils import (
     parse_video_metadata,
     validate_subtitle_timing,
 )
+from cinesub.services.animetosho import AnimeToshoService
+from cinesub.services.assrt import AssrtService
 from cinesub.services.betaseries import BetaSeriesService
+from cinesub.services.bsplayer import BsplayerService
+from cinesub.services.gestdown import GestdownService
 from cinesub.services.opensubtitles import OpenSubtitlesService
 from cinesub.services.subdl import SubdlService
 from cinesub.services.subsource import SubsourceService
@@ -58,6 +62,26 @@ def get_active_services(provider_filter: str = "all") -> dict[str, Any]:
         bs_svc = BetaSeriesService()
         if bs_svc.is_configured:
             services["betaseries"] = bs_svc
+
+    if chosen in ("all", "gestdown", "gd"):
+        gd_svc = GestdownService()
+        if gd_svc.is_configured:
+            services["gestdown"] = gd_svc
+
+    if chosen in ("all", "bsplayer", "bp"):
+        bp_svc = BsplayerService()
+        if bp_svc.is_configured:
+            services["bsplayer"] = bp_svc
+
+    if chosen in ("all", "animetosho", "at"):
+        at_svc = AnimeToshoService()
+        if at_svc.is_configured:
+            services["animetosho"] = at_svc
+
+    if chosen in ("all", "assrt", "as"):
+        as_svc = AssrtService()
+        if as_svc.is_configured:
+            services["assrt"] = as_svc
 
     return services
 
@@ -145,9 +169,8 @@ def download_subtitle(
     services = get_active_services(provider)
     if not services:
         raise RuntimeError(
-            "No subtitle providers configured. Please add OPENSUBTITLES_API_KEY, "
-            "SUBDL_API_KEY, SUBSOURCE_API_KEY, SUBSRO_API_KEY, or "
-            "BETASERIES_API_KEY to your .env file."
+            f"No subtitle providers available matching filter '{provider}'. "
+            "Please check provider configuration or .env credentials."
         )
 
     all_matches: list[SubtitleMatch] = []
@@ -408,7 +431,10 @@ def download_bulk(
 
     services = get_active_services(provider)
     if not services:
-        raise RuntimeError("No subtitle providers configured. Check your .env file.")
+        raise RuntimeError(
+            f"No subtitle providers available matching filter '{provider}'. "
+            "Please check provider configuration or .env credentials."
+        )
 
     candidates: list[SubtitleMatch] = []
     for name, svc in services.items():

@@ -1,5 +1,3 @@
-"""Module for inspecting and extracting embedded subtitle tracks from video containers."""
-
 from __future__ import annotations
 
 import os

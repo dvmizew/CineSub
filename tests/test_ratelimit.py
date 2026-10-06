@@ -1,5 +1,3 @@
-"""Tests for thread-safe rate limiter."""
-
 from __future__ import annotations
 
 import time

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import datetime
+import gzip
 import io
+import lzma
 import os
 import re
 import shutil
@@ -18,6 +21,7 @@ from guessit import guessit
 from rapidfuzz import fuzz
 
 from cinesub.core.constants import (
+    GZIP_MAGIC_BYTES,
     IGNORED_DIRS,
     MAX_SUBTITLE_DURATION_TOLERANCE_SECONDS,
     MIN_SUBTITLE_DURATION_RATIO,
@@ -32,6 +36,7 @@ from cinesub.core.constants import (
     SHORT_TITLE_MAX_LENGTH,
     SUBTITLE_EXTENSIONS,
     SUPPORTED_VIDEO_EXTS,
+    XZ_MAGIC_BYTES,
     ZIP_MAGIC_BYTES,
 )
 from cinesub.core.hasher import calculate_movie_hash
@@ -53,6 +58,32 @@ def normalize_language(lang: str) -> str:
             pass
 
     return cleaned[:2]
+
+
+def normalize_language_alpha3(lang: str, bibliographic: bool = False) -> str:
+    """Normalize language code or name to standard 3-letter ISO 639-2 code."""
+    alpha2 = normalize_language(lang)
+    try:
+        lang_obj = Language.fromalpha2(alpha2)
+        if bibliographic:
+            alpha3b = getattr(lang_obj, "alpha3b", None)
+            if alpha3b:
+                return str(alpha3b)
+        return str(lang_obj.alpha3)
+    except (ValueError, LookupError, BabelfishError):
+        return alpha2
+
+
+def languages_match(lang_a: str, lang_b: str) -> bool:
+    """Check if two language codes/names refer to the same language."""
+    norm_a = normalize_language(lang_a)
+    norm_b = normalize_language(lang_b)
+    if norm_a == norm_b:
+        return True
+    try:
+        return Language.fromalpha2(norm_a).alpha3 == Language.fromalpha2(norm_b).alpha3
+    except (ValueError, LookupError, BabelfishError):
+        return False
 
 
 def decode_and_normalize_subtitle_content(raw_bytes: bytes) -> bytes:
@@ -124,6 +155,133 @@ def extract_best_subtitle_from_archive(
                     chosen_candidate = candidate_name
 
         return zip_archive.read(chosen_candidate)
+
+
+_DIALOGUE_REGEX = re.compile(
+    r"^Dialogue:\s*[^,]*,(\d+:\d+:\d+[\.,]\d+),(\d+:\d+:\d+[\.,]\d+),.*?,.*?,.*?,.*?,.*?,.*?,(.*)$"
+)
+
+
+def _parse_ass_timestamp(timestamp_str: str) -> datetime.timedelta:
+    """Parse ASS timestamp H:MM:SS.cc into datetime.timedelta."""
+    parts = timestamp_str.replace(",", ".").split(":")
+    hours = int(parts[0])
+    minutes = int(parts[1])
+    sec_parts = parts[2].split(".")
+    seconds = int(sec_parts[0])
+    fraction_str = sec_parts[1] if len(sec_parts) > 1 else "0"
+    milliseconds = int(fraction_str.ljust(3, "0")[:3])
+    return datetime.timedelta(
+        hours=hours,
+        minutes=minutes,
+        seconds=seconds,
+        milliseconds=milliseconds,
+    )
+
+
+def convert_ass_to_srt_bytes(ass_bytes: bytes) -> bytes:
+    """Convert ASS/SSA content to standard UTF-8 SRT bytes."""
+    try:
+        ass_text = ass_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        ass_text = ass_bytes.decode("utf-8", errors="replace")
+
+    subtitles: list[srt.Subtitle] = []
+    current_index = 1
+
+    for line in ass_text.splitlines():
+        trimmed = line.strip()
+        if not trimmed.startswith("Dialogue:"):
+            continue
+        match = _DIALOGUE_REGEX.match(trimmed)
+        if not match:
+            continue
+        start_str, end_str, raw_text = match.groups()
+
+        clean_text = re.sub(r"\{.*?\}", "", raw_text)
+        clean_text = (
+            clean_text.replace(r"\N", "\n").replace(r"\n", "\n").replace(r"\h", " ").strip()
+        )
+        if not clean_text:
+            continue
+
+        try:
+            start_delta = _parse_ass_timestamp(start_str)
+            end_delta = _parse_ass_timestamp(end_str)
+            if end_delta <= start_delta:
+                continue
+
+            subtitles.append(
+                srt.Subtitle(
+                    index=current_index,
+                    start=start_delta,
+                    end=end_delta,
+                    content=clean_text,
+                )
+            )
+            current_index += 1
+        except (ValueError, IndexError):
+            continue
+
+    if not subtitles:
+        return ass_bytes
+
+    composed_srt = srt.compose(subtitles, reindex=True)
+    return composed_srt.encode("utf-8")
+
+
+def atomic_write_file(destination: Path, content: bytes) -> Path:
+    """Atomically write content bytes to destination path using a temporary hidden file."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = destination.parent / f".{destination.name}.tmp"
+    temp_file.write_bytes(content)
+    os.replace(temp_file, destination)
+    return destination
+
+
+def save_subtitle_to_disk(
+    raw_payload: bytes,
+    destination: Path,
+    max_payload_bytes: int = 10 * 1024 * 1024,
+) -> Path:
+    """Safely unpack, convert, normalize, and atomically write subtitle content to disk.
+
+    Handles:
+    - In-memory Gzip decompression
+    - In-memory LZMA/XZ decompression
+    - In-memory ZIP archive unpacking
+    - ASS/SSA dialogue conversion to standard SRT
+    - Character encoding detection and normalization to UTF-8
+    - SRT structural validation and reindexing
+    - Atomic POSIX file replacement
+    """
+    if not raw_payload:
+        raise ValueError("Subtitle payload is empty.")
+
+    payload = raw_payload
+
+    if payload.startswith(GZIP_MAGIC_BYTES):
+        payload = gzip.decompress(payload)
+    elif payload.startswith(XZ_MAGIC_BYTES):
+        payload = lzma.decompress(payload)
+    elif payload.startswith(ZIP_MAGIC_BYTES):
+        payload = extract_best_subtitle_from_archive(
+            payload,
+            target_stem=destination.stem,
+            max_uncompressed_bytes=max_payload_bytes,
+        )
+
+    if len(payload) > max_payload_bytes:
+        raise ValueError(
+            f"Subtitle payload exceeds safe threshold "
+            f"({len(payload)} bytes, max {max_payload_bytes} bytes)."
+        )
+
+    if payload.startswith(b"[Script Info]") or b"Dialogue:" in payload[:4096]:
+        payload = convert_ass_to_srt_bytes(payload)
+
+    normalized_bytes = decode_and_normalize_subtitle_content(payload)
+    return atomic_write_file(destination, normalized_bytes)
 
 
 _GROUP_CLUSTERS: list[frozenset[str]] = [
@@ -409,6 +567,31 @@ _GROUP_ALIASES: dict[str, frozenset[str]] = {}
 for _cluster in _GROUP_CLUSTERS:
     for _member in _cluster:
         _GROUP_ALIASES[_member] = _cluster
+
+_SOURCE_CLUSTERS: tuple[frozenset[str], ...] = (
+    frozenset({"blu-ray", "bluray", "bdrip", "brrip", "uhd-bluray"}),
+    frozenset({"web-dl", "webdl", "webrip", "web"}),
+    frozenset({"hdtv", "pdtv", "dsr"}),
+    frozenset({"dvd", "dvdrip"}),
+    frozenset({"remux", "bdremux"}),
+)
+
+_SOURCE_ALIASES: dict[str, frozenset[str]] = {}
+for _src_cluster in _SOURCE_CLUSTERS:
+    for _src_member in _src_cluster:
+        _SOURCE_ALIASES[_src_member] = _src_cluster
+
+_CODEC_CLUSTERS: tuple[frozenset[str], ...] = (
+    frozenset({"h.264", "h264", "x264", "avc"}),
+    frozenset({"h.265", "h265", "x265", "hevc"}),
+    frozenset({"xvid", "divx"}),
+    frozenset({"av1"}),
+)
+
+_CODEC_ALIASES: dict[str, frozenset[str]] = {}
+for _codec_cluster in _CODEC_CLUSTERS:
+    for _codec_member in _codec_cluster:
+        _CODEC_ALIASES[_codec_member] = _codec_cluster
 
 _GENERIC_MEDIA_TITLES: frozenset[str] = frozenset(
     {
@@ -794,11 +977,17 @@ def score_subtitle_candidate(
             if prefix_tokens:
                 return 0.0
 
-        # Release year alignment: if candidate has a 4-digit year, it must match video_meta.year
+        # Short title release year alignment: 4-digit year must match video_meta.year
         if video_meta.year:
             candidate_years = [int(y) for y in re.findall(r"\b(19\d\d|20\d\d)\b", rel_lower)]
             if candidate_years and video_meta.year not in candidate_years:
                 return 0.0
+
+    # General release year consistency for movies: reject candidates with conflicting release years
+    if video_meta.year and not video_meta.is_episode:
+        all_candidate_years = [int(y) for y in re.findall(r"\b(19\d\d|20\d\d)\b", rel_lower)]
+        if all_candidate_years and video_meta.year not in all_candidate_years:
+            return 0.0
 
     score = SCORE_BASE
 
@@ -825,11 +1014,21 @@ def score_subtitle_candidate(
     if video_meta.screen_size and video_meta.screen_size.lower() in rel_lower:
         score += SCORE_RESOLUTION_MATCH
 
-    if video_meta.source and video_meta.source.lower() in rel_lower:
-        score += SCORE_SOURCE_MATCH
+    if video_meta.source:
+        target_source = video_meta.source.lower().strip()
+        source_aliases = _SOURCE_ALIASES.get(target_source)
+        if (source_aliases and any(alias in rel_lower for alias in source_aliases)) or (
+            target_source in rel_lower
+        ):
+            score += SCORE_SOURCE_MATCH
 
-    if video_meta.video_codec and video_meta.video_codec.lower() in rel_lower:
-        score += SCORE_CODEC_MATCH
+    if video_meta.video_codec:
+        target_codec = video_meta.video_codec.lower().strip()
+        codec_aliases = _CODEC_ALIASES.get(target_codec)
+        if (codec_aliases and any(alias in rel_lower for alias in codec_aliases)) or (
+            target_codec in rel_lower
+        ):
+            score += SCORE_CODEC_MATCH
 
     score += download_bonus
     return score
@@ -856,20 +1055,15 @@ def has_existing_subtitle(video_path: str | Path, language: str | None = None) -
                 parent_dir / f"{video_stem}.{lang_clean}.default.srt",
             ]
         )
-        try:
-            converted_lang = Language.fromalpha2(lang_clean)
-            alpha3b_code = getattr(converted_lang, "alpha3b", None)
-            if alpha3b_code:
-                lang_3b = str(alpha3b_code)
-                candidates.extend(
-                    [
-                        parent_dir / f"{video_stem}.{lang_3b}.srt",
-                        parent_dir / f"{video_stem}.{lang_3b}.sdh.srt",
-                        parent_dir / f"{video_stem}.{lang_3b}.forced.srt",
-                    ]
-                )
-        except (ValueError, LookupError, BabelfishError):
-            pass
+        lang_3b = normalize_language_alpha3(lang_clean, bibliographic=True)
+        if lang_3b and lang_3b != lang_clean:
+            candidates.extend(
+                [
+                    parent_dir / f"{video_stem}.{lang_3b}.srt",
+                    parent_dir / f"{video_stem}.{lang_3b}.sdh.srt",
+                    parent_dir / f"{video_stem}.{lang_3b}.forced.srt",
+                ]
+            )
 
     for candidate_path in candidates:
         if candidate_path.is_file() and candidate_path.stat().st_size > 0:

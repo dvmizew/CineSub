@@ -98,7 +98,7 @@ def download(
             name=["--provider", "-p"],
             help=(
                 "Provider to search: 'all', 'opensubtitles', 'subdl', 'subsource', "
-                "'subsro', or 'betaseries'."
+                "'subsro', 'betaseries', 'gestdown', 'bsplayer', 'animetosho', or 'assrt'."
             ),
         ),
     ] = "all",
@@ -318,7 +318,10 @@ def bulk(
         str,
         Parameter(
             name=["--provider", "-p"],
-            help="Provider to search: 'all', 'opensubtitles', 'subdl', or 'subsource'.",
+            help=(
+                "Provider to search: 'all', 'opensubtitles', 'subdl', 'subsource', "
+                "'subsro', 'betaseries', 'gestdown', 'bsplayer', 'animetosho', or 'assrt'."
+            ),
         ),
     ] = "all",
     threads: Annotated[
@@ -467,6 +470,7 @@ def config() -> None:
     betaseries_key = (
         os.getenv("BETASERIES_API_KEY", "").strip() or os.getenv("BETA_SERIES_API_KEY", "").strip()
     )
+    assrt_key = os.getenv("ASSRT_API_TOKEN", "").strip() or os.getenv("ASSRT_TOKEN", "").strip()
     tmdb_token = (
         os.getenv("TMDB_READ_ACCESS_TOKEN", "").strip() or os.getenv("TMDB_API_KEY", "").strip()
     )
@@ -517,6 +521,23 @@ def config() -> None:
     )
     table.add_row("BetaSeries API", betaseries_status)
     table.add_row("BetaSeries Rate Limit", "2.0 req/s (Safe Client Cap)")
+
+    table.add_row("Gestdown API", "[green]Active (Free TV REST API)[/green]")
+    table.add_row("Gestdown Rate Limit", "2.0 req/s (Safe Client Cap)")
+
+    table.add_row("BSPlayer API", "[green]Active (Free 64-bit Hash SOAP)[/green]")
+    table.add_row("BSPlayer Rate Limit", "2.0 req/s (Safe Client Cap)")
+
+    table.add_row("AnimeTosho API", "[green]Active (Free Feed & Attachments)[/green]")
+    table.add_row("AnimeTosho Rate Limit", "2.0 req/s (Safe Client Cap)")
+
+    assrt_status = (
+        f"[green]{_mask_secret(assrt_key)}[/green]"
+        if assrt_key
+        else "[yellow]Missing (ASSRT_API_TOKEN)[/yellow]"
+    )
+    table.add_row("Assrt.net API", assrt_status)
+    table.add_row("Assrt.net Rate Limit", "0.33 req/s (20 req/min Cap)")
 
     tmdb_status = (
         f"[green]{_mask_secret(tmdb_token)}[/green]"

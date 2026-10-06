@@ -1,5 +1,3 @@
-"""The Movie Database (TMDb) API v3/v4 Client."""
-
 from __future__ import annotations
 
 import os

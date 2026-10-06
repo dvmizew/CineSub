@@ -1,8 +1,5 @@
-"""OpenSubtitles.com REST API v1 Client."""
-
 from __future__ import annotations
 
-import gzip
 import os
 from pathlib import Path
 from typing import Any
@@ -10,12 +7,12 @@ from typing import Any
 import httpx
 import orjson
 
-from cinesub.core.constants import GZIP_MAGIC_BYTES, OPENSUBTITLES_API_URL, USER_AGENT
+from cinesub.core.constants import OPENSUBTITLES_API_URL, USER_AGENT
 from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import OPENSUBTITLES_LIMITER
-from cinesub.core.utils import decode_and_normalize_subtitle_content, score_subtitle_candidate
+from cinesub.core.utils import save_subtitle_to_disk, score_subtitle_candidate
 
 
 class OpenSubtitlesService:
@@ -218,19 +215,4 @@ class OpenSubtitlesService:
         file_resp = self._send_request("GET", download_url)
         file_resp.raise_for_status()
 
-        content = file_resp.content
-        if content.startswith(GZIP_MAGIC_BYTES):
-            content = gzip.decompress(content)
-
-        if len(content) > 10 * 1024 * 1024:
-            raise ValueError(
-                f"OpenSubtitles payload exceeds safe threshold ({len(content)} bytes, max 10MB)."
-            )
-
-        clean_bytes = decode_and_normalize_subtitle_content(content)
-
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temp_dest = destination.parent / f".{destination.name}.tmp"
-        temp_dest.write_bytes(clean_bytes)
-        os.replace(temp_dest, destination)
-        return destination
+        return save_subtitle_to_disk(file_resp.content, destination)

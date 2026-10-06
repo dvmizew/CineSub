@@ -892,3 +892,27 @@ def test_real_media_library_fine_tuning(tmp_path: Path) -> None:
         assert meta.release_group == expected_group, (
             f"Group mismatch for {fname}: got {meta.release_group}"
         )
+
+
+def test_source_and_codec_alias_clusters() -> None:
+    """Validate bidirectional source and video codec alias clusters."""
+    video_meta = VideoMetadata(
+        file_path=Path("/tmp/21.Bridges.2019.1080p.BluRay.x264.AAC5.1-[YTS.MX].mp4"),
+        title="21 Bridges",
+        year=2019,
+        screen_size="1080p",
+        source="Blu-ray",
+        video_codec="H.264",
+        release_group="YTS.MX",
+        is_episode=False,
+    )
+
+    # Candidate with alternative alias spelling ('BluRay' vs 'Blu-ray', 'x264' vs 'H.264')
+    candidate_name = "21.Bridges.2019.1080p.BluRay.x264.AAC5.1-[YTS.MX]"
+    score = score_subtitle_candidate(video_meta, candidate_name)
+    assert score >= 90.0
+
+    # Conflicting year rejection for movies
+    conflicting_candidate = "21.Bridges.2015.1080p.BluRay.x264.AAC5.1-[YTS.MX]"
+    conflicting_score = score_subtitle_candidate(video_meta, conflicting_candidate)
+    assert conflicting_score == 0.0

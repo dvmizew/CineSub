@@ -1,8 +1,8 @@
-"""Tests for metadata parsing, encoding normalization, and language normalization."""
-
 from __future__ import annotations
 
+import gzip
 import io
+import lzma
 import zipfile
 from pathlib import Path
 
@@ -10,13 +10,18 @@ import pytest
 
 from cinesub.core.constants import SUPPORTED_VIDEO_EXTS
 from cinesub.core.utils import (
+    atomic_write_file,
+    convert_ass_to_srt_bytes,
     decode_and_normalize_subtitle_content,
     extract_best_subtitle_from_archive,
     find_video_files,
     has_existing_subtitle,
+    languages_match,
     normalize_language,
+    normalize_language_alpha3,
     parse_directory_metadata,
     parse_video_metadata,
+    save_subtitle_to_disk,
     score_subtitle_candidate,
 )
 
@@ -234,3 +239,99 @@ def test_extract_best_subtitle_from_archive() -> None:
         zf.writestr("readme.txt", b"instructions")
     with pytest.raises(ValueError, match="No valid subtitle file found"):
         extract_best_subtitle_from_archive(empty_zip_buf.getvalue(), "movie")
+
+
+def test_normalize_language_alpha3() -> None:
+    assert normalize_language_alpha3("en") == "eng"
+    assert normalize_language_alpha3("ro") == "ron"
+    assert normalize_language_alpha3("ro", bibliographic=True) == "rum"
+    assert normalize_language_alpha3("de", bibliographic=True) == "ger"
+    assert normalize_language_alpha3("fr", bibliographic=True) == "fre"
+    assert normalize_language_alpha3("spa") == "spa"
+    assert normalize_language_alpha3("invalid_xyz") == "in"
+
+
+def test_languages_match() -> None:
+    assert languages_match("en", "eng") is True
+    assert languages_match("ro", "rum") is True
+    assert languages_match("ro", "ron") is True
+    assert languages_match("fre", "fr") is True
+    assert languages_match("de", "ger") is True
+    assert languages_match("en", "ro") is False
+    assert languages_match("xyz", "abc") is False
+
+
+def test_atomic_write_file(tmp_path: Path) -> None:
+    dest = tmp_path / "subdir" / "test.txt"
+    content = b"atomic content"
+    written_path = atomic_write_file(dest, content)
+    assert written_path == dest
+    assert dest.is_file()
+    assert dest.read_bytes() == content
+    assert not (tmp_path / "subdir" / ".test.txt.tmp").exists()
+
+
+def test_convert_ass_to_srt_bytes() -> None:
+    ass_data = (
+        b"[Script Info]\n"
+        b"Title: Sample ASS\n"
+        b"[Events]\n"
+        b"Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        b"Dialogue: 0,0:01:05.50,0:01:08.20,Default,,0,0,0,,{\\i1}Hello world{\\i0}\\NSecond line\n"
+        b"Dialogue: 0,0:01:10.00,0:01:12.00,Default,,0,0,0,,Goodbye\n"
+    )
+    srt_result = convert_ass_to_srt_bytes(ass_data)
+    srt_text = srt_result.decode("utf-8")
+    assert "00:01:05,500 --> 00:01:08,200" in srt_text
+    assert "Hello world\nSecond line" in srt_text
+    assert "Goodbye" in srt_text
+
+    # Non-ASS pass-through
+    raw_text = b"plain text with no dialogue lines"
+    assert convert_ass_to_srt_bytes(raw_text) == raw_text
+
+
+def test_save_subtitle_to_disk_variants(tmp_path: Path) -> None:
+    # 1. Plain SRT
+    plain_srt = b"1\n00:00:01,000 --> 00:00:02,000\nPlain SRT Content\n"
+    dest1 = tmp_path / "plain.srt"
+    save_subtitle_to_disk(plain_srt, dest1)
+    assert dest1.is_file()
+    assert "Plain SRT Content" in dest1.read_text(encoding="utf-8")
+
+    # 2. Gzip-compressed SRT
+    gzipped = gzip.compress(plain_srt)
+    dest2 = tmp_path / "gzipped.srt"
+    save_subtitle_to_disk(gzipped, dest2)
+    assert dest2.is_file()
+    assert "Plain SRT Content" in dest2.read_text(encoding="utf-8")
+
+    # 3. LZMA/XZ-compressed ASS -> converted to SRT
+    ass_data = (
+        b"[Script Info]\n"
+        b"Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,{\\b1}XZ Anime Sub{\\b0}\n"
+    )
+    xz_data = lzma.compress(ass_data)
+    dest3 = tmp_path / "anime.srt"
+    save_subtitle_to_disk(xz_data, dest3)
+    assert dest3.is_file()
+    assert "XZ Anime Sub" in dest3.read_text(encoding="utf-8")
+
+    # 4. Zip archive containing matching subtitle
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w") as zf:
+        zf.writestr("Movie.2024.1080p.srt", plain_srt)
+    dest4 = tmp_path / "Movie.2024.1080p.srt"
+    save_subtitle_to_disk(zip_buf.getvalue(), dest4)
+    assert dest4.is_file()
+    assert "Plain SRT Content" in dest4.read_text(encoding="utf-8")
+
+    # 5. Empty payload raises ValueError
+    with pytest.raises(ValueError, match="Subtitle payload is empty"):
+        save_subtitle_to_disk(b"", tmp_path / "empty.srt")
+
+    # 6. Decompression bomb safeguard
+    huge_uncompressed = b"A" * (11 * 1024 * 1024)
+    huge_gzip = gzip.compress(huge_uncompressed)
+    with pytest.raises(ValueError, match="exceeds safe threshold"):
+        save_subtitle_to_disk(huge_gzip, tmp_path / "huge.srt")
