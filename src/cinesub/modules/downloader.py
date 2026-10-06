@@ -19,8 +19,12 @@ from cinesub.core.utils import (
     parse_video_metadata,
 )
 from cinesub.modules.syncer import sync_subtitle_audio
+from cinesub.services.betaseries import BetaSeriesService
 from cinesub.services.opensubtitles import OpenSubtitlesService
 from cinesub.services.subdl import SubdlService
+from cinesub.services.subsource import SubsourceService
+from cinesub.services.subsro import SubsRoService
+from cinesub.services.tmdb import TmdbService
 
 
 def get_active_services(provider_filter: str = "all") -> dict[str, Any]:
@@ -37,6 +41,21 @@ def get_active_services(provider_filter: str = "all") -> dict[str, Any]:
         subdl_svc = SubdlService()
         if subdl_svc.is_configured:
             services["subdl"] = subdl_svc
+
+    if chosen in ("all", "subsource", "ss"):
+        ss_svc = SubsourceService()
+        if ss_svc.is_configured:
+            services["subsource"] = ss_svc
+
+    if chosen in ("all", "subsro", "sr", "subs.ro"):
+        subsro_svc = SubsRoService()
+        if subsro_svc.is_configured:
+            services["subsro"] = subsro_svc
+
+    if chosen in ("all", "betaseries", "bs"):
+        bs_svc = BetaSeriesService()
+        if bs_svc.is_configured:
+            services["betaseries"] = bs_svc
 
     return services
 
@@ -115,11 +134,21 @@ def download_and_sync(
     LOG.info(f"Analyzing media file: [white]{path.name}[/white]")
     video_meta = parse_video_metadata(path, compute_hash=True)
 
+    tmdb_svc = TmdbService()
+    if tmdb_svc.is_configured:
+        try:
+            video_meta = tmdb_svc.enrich_video_metadata(video_meta)
+            if video_meta.imdb_id:
+                LOG.debug(f"Resolved IMDb ID via TMDb: {video_meta.imdb_id}")
+        except Exception as exc:
+            LOG.debug(f"TMDb enrichment warning: {exc}")
+
     services = get_active_services(provider)
     if not services:
         raise RuntimeError(
-            "No subtitle providers configured. "
-            "Please add OPENSUBTITLES_API_KEY or SUBDL_API_KEY to your .env file."
+            "No subtitle providers configured. Please add OPENSUBTITLES_API_KEY, "
+            "SUBDL_API_KEY, SUBSOURCE_API_KEY, SUBSRO_API_KEY, or "
+            "BETASERIES_API_KEY to your .env file."
         )
 
     all_matches: list[SubtitleMatch] = []
@@ -173,35 +202,39 @@ def download_and_sync(
 
 
 def _format_sync_item_report(
-    meta: VideoMetadata,
-    match: SubtitleMatch | None,
-    sync_res: SyncResult | None,
-    srt_p: Path,
+    video_meta: VideoMetadata,
+    subtitle_match: SubtitleMatch | None,
+    synchronization_result: SyncResult | None,
+    subtitle_path: Path,
     status: str = "success",
 ) -> dict[str, Any]:
     return {
-        "video_file": meta.file_path.name,
-        "video_path": str(meta.file_path),
-        "title": meta.title,
-        "year": meta.year,
-        "is_episode": meta.is_episode,
-        "moviehash": meta.moviehash,
+        "video_file": video_meta.file_path.name,
+        "video_path": str(video_meta.file_path),
+        "title": video_meta.title,
+        "year": video_meta.year,
+        "is_episode": video_meta.is_episode,
+        "moviehash": video_meta.moviehash,
         "subtitle": {
-            "id": match.id if match else "existing",
-            "provider": match.provider if match else "local",
-            "language": match.language if match else "local",
-            "release_name": match.release_name if match else srt_p.name,
-            "matched_by_hash": match.matched_by_hash if match else False,
-            "score": match.score if match else 100.0,
-            "saved_path": str(srt_p),
+            "id": subtitle_match.id if subtitle_match else "existing",
+            "provider": subtitle_match.provider if subtitle_match else "local",
+            "language": subtitle_match.language if subtitle_match else "local",
+            "release_name": (subtitle_match.release_name if subtitle_match else subtitle_path.name),
+            "matched_by_hash": subtitle_match.matched_by_hash if subtitle_match else False,
+            "score": subtitle_match.score if subtitle_match else 100.0,
+            "saved_path": str(subtitle_path),
         },
         "sync": {
-            "success": sync_res.success if sync_res else None,
-            "offset_seconds": sync_res.offset_seconds if sync_res else None,
-            "framerate_scale": sync_res.framerate_scale if sync_res else None,
+            "success": synchronization_result.success if synchronization_result else None,
+            "offset_seconds": (
+                synchronization_result.offset_seconds if synchronization_result else None
+            ),
+            "framerate_scale": (
+                synchronization_result.framerate_scale if synchronization_result else None
+            ),
             "message": (
-                sync_res.message
-                if sync_res
+                synchronization_result.message
+                if synchronization_result
                 else (
                     "Skipped (Existing Subtitle)"
                     if status == "skipped"
@@ -230,8 +263,8 @@ def download_and_sync_batch(
     services = get_active_services(provider)
     if not services:
         raise RuntimeError(
-            "No subtitle providers configured. "
-            "Please add OPENSUBTITLES_API_KEY or SUBDL_API_KEY to your .env file."
+            "No subtitle providers configured. Please add OPENSUBTITLES_API_KEY, "
+            "SUBDL_API_KEY, or SUBSOURCE_API_KEY to your .env file."
         )
 
     start_time = time.perf_counter()
@@ -245,10 +278,15 @@ def download_and_sync_batch(
     dry_run_count = 0
     failed_count = 0
 
-    def _worker(v_path: Path) -> dict[str, Any]:
+    def _worker(video_file_path: Path) -> dict[str, Any]:
         try:
-            meta, match, sync_res, srt_p = download_and_sync(
-                video_path=v_path,
+            (
+                video_meta,
+                subtitle_match,
+                synchronization_result,
+                subtitle_path,
+            ) = download_and_sync(
+                video_path=video_file_path,
                 language=language,
                 provider=provider,
                 do_sync=do_sync,
@@ -258,18 +296,24 @@ def download_and_sync_batch(
                 use_lang_suffix=use_lang_suffix,
                 dry_run=dry_run,
             )
-            if match is None:
+            if subtitle_match is None:
                 item_status = "skipped"
             elif dry_run:
                 item_status = "dry_run"
             else:
                 item_status = "success"
-            return _format_sync_item_report(meta, match, sync_res, srt_p, status=item_status)
+            return _format_sync_item_report(
+                video_meta=video_meta,
+                subtitle_match=subtitle_match,
+                synchronization_result=synchronization_result,
+                subtitle_path=subtitle_path,
+                status=item_status,
+            )
         except Exception as exc:
-            LOG.error(f"Failed processing {v_path.name}: {exc}")
+            LOG.error(f"Failed processing {video_file_path.name}: {exc}")
             return {
-                "video_file": v_path.name,
-                "video_path": str(v_path),
+                "video_file": video_file_path.name,
+                "video_path": str(video_file_path),
                 "status": "failed",
                 "error": str(exc),
             }
@@ -277,12 +321,12 @@ def download_and_sync_batch(
     if len(video_files) == 1:
         item_report = _worker(video_files[0])
         report_items.append(item_report)
-        st = item_report.get("status")
-        if st == "success":
+        item_status = item_report.get("status")
+        if item_status == "success":
             successful_count += 1
-        elif st == "dry_run":
+        elif item_status == "dry_run":
             dry_run_count += 1
-        elif st == "skipped":
+        elif item_status == "skipped":
             skipped_count += 1
         else:
             failed_count += 1
@@ -300,12 +344,12 @@ def download_and_sync_batch(
                 for future in as_completed(future_map):
                     item_report = future.result()
                     report_items.append(item_report)
-                    st = item_report.get("status")
-                    if st == "success":
+                    item_status = item_report.get("status")
+                    if item_status == "success":
                         successful_count += 1
-                    elif st == "dry_run":
+                    elif item_status == "dry_run":
                         dry_run_count += 1
-                    elif st == "skipped":
+                    elif item_status == "skipped":
                         skipped_count += 1
                     else:
                         failed_count += 1
@@ -313,7 +357,7 @@ def download_and_sync_batch(
                     future_map.pop(future, None)
             except KeyboardInterrupt:
                 LOG.warning("\nBatch execution interrupted by user. Stopping worker threads...")
-                executor.shutdown(wait=False, cancel_futures=True)
+                executor.shutdown(wait=True, cancel_futures=True)
                 raise
 
     elapsed = max(0.001, time.perf_counter() - start_time)
@@ -355,6 +399,13 @@ def download_bulk(
 
     target_lang = normalize_language(language or DEFAULT_LANGUAGE)
     video_meta = parse_video_metadata(path, compute_hash=True)
+
+    tmdb_svc = TmdbService()
+    if tmdb_svc.is_configured:
+        try:
+            video_meta = tmdb_svc.enrich_video_metadata(video_meta)
+        except Exception as exc:
+            LOG.debug(f"TMDb enrichment warning: {exc}")
 
     services = get_active_services(provider)
     if not services:
@@ -419,20 +470,22 @@ def download_bulk(
 
 
 def _format_bulk_item_report(
-    meta: VideoMetadata, items: list[tuple[SubtitleMatch, Path]], status: str = "success"
+    video_meta: VideoMetadata,
+    downloaded_subtitles: list[tuple[SubtitleMatch, Path]],
+    status: str = "success",
 ) -> dict[str, Any]:
     return {
-        "video_file": meta.file_path.name,
-        "video_path": str(meta.file_path),
+        "video_file": video_meta.file_path.name,
+        "video_path": str(video_meta.file_path),
         "subtitles": [
             {
-                "id": m.id,
-                "provider": m.provider,
-                "release_name": m.release_name,
-                "score": m.score,
-                "saved_path": str(p),
+                "id": match_item.id,
+                "provider": match_item.provider,
+                "release_name": match_item.release_name,
+                "score": match_item.score,
+                "saved_path": str(saved_path),
             }
-            for m, p in items
+            for match_item, saved_path in downloaded_subtitles
         ],
         "status": status,
     }
@@ -452,8 +505,8 @@ def download_bulk_batch(
     services = get_active_services(provider)
     if not services:
         raise RuntimeError(
-            "No subtitle providers configured. "
-            "Please add OPENSUBTITLES_API_KEY or SUBDL_API_KEY to your .env file."
+            "No subtitle providers configured. Please add OPENSUBTITLES_API_KEY, "
+            "SUBDL_API_KEY, or SUBSOURCE_API_KEY to your .env file."
         )
 
     start_time = time.perf_counter()
@@ -466,23 +519,23 @@ def download_bulk_batch(
     dry_run_count = 0
     failed_count = 0
 
-    def _worker(v_path: Path) -> dict[str, Any]:
+    def _worker(video_file_path: Path) -> dict[str, Any]:
         try:
-            meta, items = download_bulk(
-                video_path=v_path,
+            video_meta, downloaded_subtitles = download_bulk(
+                video_path=video_file_path,
                 language=language,
                 limit=limit,
                 provider=provider,
                 force=force,
                 dry_run=dry_run,
             )
-            status = "dry_run" if dry_run else "success"
-            return _format_bulk_item_report(meta, items, status=status)
+            item_status = "dry_run" if dry_run else "success"
+            return _format_bulk_item_report(video_meta, downloaded_subtitles, status=item_status)
         except Exception as exc:
-            LOG.error(f"Failed bulk retrieval for {v_path.name}: {exc}")
+            LOG.error(f"Failed bulk retrieval for {video_file_path.name}: {exc}")
             return {
-                "video_file": v_path.name,
-                "video_path": str(v_path),
+                "video_file": video_file_path.name,
+                "video_path": str(video_file_path),
                 "status": "failed",
                 "error": str(exc),
             }
@@ -490,10 +543,10 @@ def download_bulk_batch(
     if len(video_files) == 1:
         item_report = _worker(video_files[0])
         report_items.append(item_report)
-        st = item_report.get("status")
-        if st == "success":
+        item_status = item_report.get("status")
+        if item_status == "success":
             successful_count += 1
-        elif st == "dry_run":
+        elif item_status == "dry_run":
             dry_run_count += 1
         else:
             failed_count += 1
@@ -511,10 +564,10 @@ def download_bulk_batch(
                 for future in as_completed(future_map):
                     item_report = future.result()
                     report_items.append(item_report)
-                    st = item_report.get("status")
-                    if st == "success":
+                    item_status = item_report.get("status")
+                    if item_status == "success":
                         successful_count += 1
-                    elif st == "dry_run":
+                    elif item_status == "dry_run":
                         dry_run_count += 1
                     else:
                         failed_count += 1
@@ -522,7 +575,7 @@ def download_bulk_batch(
                     future_map.pop(future, None)
             except KeyboardInterrupt:
                 LOG.warning("\nBatch execution interrupted by user. Stopping worker threads...")
-                executor.shutdown(wait=False, cancel_futures=True)
+                executor.shutdown(wait=True, cancel_futures=True)
                 raise
 
     elapsed = max(0.001, time.perf_counter() - start_time)

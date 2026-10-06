@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,10 +10,15 @@ import pytest
 from cinesub.modules.syncer import sync_subtitle_audio
 
 
-def test_ffmpeg_detection() -> None:
-    """Test ffmpeg detection with shutil.which."""
-    res = shutil.which("ffmpeg")
-    assert res is None or isinstance(res, str)
+def test_sync_missing_ffmpeg_binary(sample_video_file: Path, sample_srt_file: Path) -> None:
+    """Test RuntimeError when ffmpeg binary is not found for ffsubsync."""
+    with patch("shutil.which", return_value=None):
+        with pytest.raises(RuntimeError, match="ffmpeg not found in PATH"):
+            sync_subtitle_audio(
+                video_path=sample_video_file,
+                srt_path=sample_srt_file,
+                engine="ffsubsync",
+            )
 
 
 def test_sync_missing_files(tmp_path: Path, sample_video_file: Path, sample_srt_file: Path) -> None:
@@ -44,22 +48,22 @@ def test_sync_execution_ffsubsync(sample_video_file: Path, sample_srt_file: Path
         patch("shutil.which", return_value="/usr/bin/ffmpeg"),
         patch("cinesub.modules.syncer.subprocess.run", side_effect=mock_subprocess_run),
     ):
-        res = sync_subtitle_audio(
+        sync_result = sync_subtitle_audio(
             video_path=sample_video_file,
             srt_path=sample_srt_file,
             keep_backup=True,
             engine="ffsubsync",
         )
 
-        assert res.success is True
-        assert res.offset_seconds == -0.350
-        assert res.framerate_scale == 1.0
-        assert "-0.350s" in res.message
+        assert sync_result.success is True
+        assert sync_result.offset_seconds == -0.350
+        assert sync_result.framerate_scale == 1.0
+        assert "-0.350s" in sync_result.message
         assert "Synced line" in sample_srt_file.read_text()
 
-        backup_p = sample_srt_file.parent / f"{sample_srt_file.stem}.orig.srt"
-        assert backup_p.exists()
-        assert "Hello, this is a test subtitle line" in backup_p.read_text()
+        backup_path = sample_srt_file.parent / f"{sample_srt_file.stem}.orig.srt"
+        assert backup_path.exists()
+        assert "Hello, this is a test subtitle line" in backup_path.read_text()
 
 
 def test_sync_execution_alass(sample_video_file: Path, sample_srt_file: Path) -> None:
@@ -78,15 +82,15 @@ def test_sync_execution_alass(sample_video_file: Path, sample_srt_file: Path) ->
         patch("shutil.which", return_value="/usr/bin/alass"),
         patch("cinesub.modules.syncer.subprocess.run", side_effect=mock_subprocess_run),
     ):
-        res = sync_subtitle_audio(
+        sync_result = sync_subtitle_audio(
             video_path=sample_video_file,
             srt_path=sample_srt_file,
             keep_backup=False,
             engine="alass",
         )
 
-        assert res.success is True
-        assert "alass" in res.message
+        assert sync_result.success is True
+        assert "alass" in sync_result.message
         assert "Alass synced" in sample_srt_file.read_text()
 
 

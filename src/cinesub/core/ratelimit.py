@@ -55,3 +55,15 @@ OPENSUBTITLES_LIMITER = RateLimiter(rate=4.0, max_burst=1.0)
 
 # SubDL: Official limit is 600 req/min (10 req/sec). Safe client rate: 8.0 req/sec.
 SUBDL_LIMITER = RateLimiter(rate=8.0, max_burst=2.0)
+
+# SubSource: Official limit is 60 req/min (1.0 req/sec). Safe client rate: 1.0 req/sec.
+SUBSOURCE_LIMITER = RateLimiter(rate=1.0, max_burst=1.0)
+
+# TMDb: Official guidance accommodates up to ~40-50 req/s. Safe client rate: 4.0 req/sec.
+TMDB_LIMITER = RateLimiter(rate=4.0, max_burst=2.0)
+
+# Subs.ro: Safe client rate: 2.0 req/sec.
+SUBSRO_LIMITER = RateLimiter(rate=2.0, max_burst=1.0)
+
+# BetaSeries: Safe client rate: 2.0 req/sec.
+BETASERIES_LIMITER = RateLimiter(rate=2.0, max_burst=1.0)

@@ -61,12 +61,14 @@ pip install -e .
 
 ## Configuration & API Credentials
 
-CineSub integrates with two major subtitle provider APIs. You can obtain free API keys from:
-
 | Provider | API Endpoint | Documentation & API Key Registration | Rate Limit |
 | :--- | :--- | :--- | :--- |
 | **OpenSubtitles.com** | `https://api.opensubtitles.com/api/v1` | [OpenSubtitles API Portal](https://www.opensubtitles.com/consumers) | 4.0 req/s (Client Cap) / 5 req/s max |
 | **SubDL** | `https://api.subdl.com/api/v1` | [SubDL API Portal](https://subdl.com/api) | 8.0 req/s (600 req/min Cap) |
+| **SubSource** | `https://api.subsource.net/api/v1` | [SubSource Account Portal](https://subsource.net) | 1.0 req/s (60 req/min Cap) |
+| **Subs.ro** | `https://api.subs.ro/v1.0` | [Subs.ro API Documentation](https://api.subs.ro) | 2.0 req/s (Safe Client Cap) |
+| **BetaSeries** | `https://api.betaseries.com` | [BetaSeries API Portal](https://www.betaseries.com/api) | 2.0 req/s (Safe Client Cap) |
+| **TMDb** | `https://api.themoviedb.org/3` | [TMDb Developer Settings](https://developer.themoviedb.org) | 4.0 req/s (Client Cap) |
 
 Create a `.env` file in your working directory or home directory:
 
@@ -80,6 +82,19 @@ OPENSUBTITLES_API_KEY=your_opensubtitles_api_key
 
 # SubDL API Key (https://subdl.com)
 SUBDL_API_KEY=your_subdl_api_key
+
+# SubSource API Key (https://subsource.net)
+SUBSOURCE_API_KEY=your_subsource_api_key
+
+# Subs.ro API Key (https://subs.ro)
+SUBSRO_API_KEY=your_subsro_api_key
+
+# BetaSeries API Key (https://www.betaseries.com/api)
+BETASERIES_API_KEY=your_betaseries_api_key
+
+# TMDb Read Access Token or API Key (https://www.themoviedb.org/settings/api)
+TMDB_READ_ACCESS_TOKEN=your_tmdb_read_access_token
+TMDB_ACCOUNT_ID=your_tmdb_account_id
 
 # Default language (ISO 639-1 code, e.g. en, ro, es, fr, de)
 CINESUB_DEFAULT_LANGUAGE=en
@@ -130,7 +145,7 @@ cinesub sync "/path/to/movies" -l ro -j report.jsonl
 | :--- | :--- | :--- |
 | `PATH` | *required* | Path to a video file or a directory containing video files |
 | `-l, --language` | `en` | Subtitle language (ISO 639-1 code, e.g. `ro`, `en`, `es`) |
-| `-p, --provider` | `all` | Search provider: `all`, `opensubtitles`, or `subdl` |
+| `-p, --provider` | `all` | Search provider: `all`, `opensubtitles`, `subdl`, `subsource`, `subsro`, or `betaseries` |
 | `-s, --sync` | `False` | Align subtitle timestamps against video audio |
 | `-e, --engine` | `ffsubsync` | Synchronization engine: `ffsubsync` (Python/FFmpeg) or `alass` (Rust) |
 | `-S, --lang-suffix` | `False` | Save subtitle with language tag for Plex/Emby (e.g. `movie.ro.srt`) |
@@ -171,7 +186,7 @@ House.of.the.Dragon.S02E01.1080p_3_opensubtitles.srt
 | `PATH` | *required* | Path to video file or directory |
 | `-l, --language` | `en` | Subtitle language code |
 | `-n, --limit` | `5` | Number of subtitle variations to download (1–20) |
-| `-p, --provider` | `all` | Provider filter (`all`, `opensubtitles`, `subdl`) |
+| `-p, --provider` | `all` | Provider filter (`all`, `opensubtitles`, `subdl`, `subsource`, `subsro`, `betaseries`) |
 | `-d, --dry-run` | `False` | Simulate search without downloading files |
 | `-t, --threads` | `4` | Number of concurrent worker threads |
 | `-j, --json` | `None` | Save structured report to a JSON or JSONL file |
@@ -180,9 +195,74 @@ House.of.the.Dragon.S02E01.1080p_3_opensubtitles.srt
 
 ---
 
-### 3. `cinesub config` — Diagnostics
+### 3. `cinesub tmdb` — The Movie Database Sync & Bookmarks / Watchlist
 
-Inspects detected API keys, rate limits, default language, and checks whether `ffmpeg` is located on your system PATH.
+Search TMDb for video files or directory names in a folder and optionally synchronize them directly to your TMDb Watchlist (Bookmarks) or Favorites:
+
+```bash
+# Query TMDb for media in a folder
+cinesub tmdb "/path/to/Movies"
+
+# Bookmark (add to Watchlist) all matched movies in TMDb
+cinesub tmdb "/path/to/Movies" -b
+
+# Scan directory / folder names directly (for libraries organized as movie folders)
+cinesub tmdb "/path/to/Movies" --by-folder -b
+
+# Add all matched movies to both TMDb Favorites and Watchlist
+cinesub tmdb "/path/to/Movies" --favorite --bookmark
+
+# Simulate without altering your TMDb account lists (Dry Run)
+cinesub tmdb "/path/to/Movies" -b --dry-run
+```
+
+**Flags & Options:**
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `PATH` | *required* | Path to video file or directory |
+| `-b, --bookmark` | `False` | Add matched media to your TMDb Watchlist / Bookmarks (alias for `-w`) |
+| `-w, --watchlist` | `False` | Add matched media to your TMDb Watchlist |
+| `-f, --favorite` | `False` | Add matched media to your TMDb Favorites list |
+| `-F, --by-folder` | `False` | Search TMDb using folder / directory names instead of video filenames |
+| `-d, --dry-run` | `False` | Simulate search without submitting modifications to TMDb |
+| `--verbose` | `False` | Enable debug logging |
+
+---
+
+### 4. `cinesub extract` — Embedded Subtitle Extraction
+
+Inspects video containers (`.mkv`, `.mp4`, `.m2ts`, etc.) using `ffprobe` and extracts embedded text-based subtitle tracks (`subrip`, `srt`, `ass`, `ssa`, `mov_text`, `webvtt`) directly into UTF-8 normalized companion `.srt` files matching Plex / Emby conventions (`<video_stem>.<lang>.srt`).
+
+**Video File Immutability Guarantee**: CineSub never modifies, re-encodes, or touches original video containers on disk. Subtitle streams are read-only mapped and written into external companion files.
+
+```bash
+# Extract all embedded subtitle streams from a movie
+cinesub extract "Oppenheimer.2023.2160p.UHD.Remux.mkv"
+
+# Extract only Romanian embedded subtitle tracks
+cinesub extract "/path/to/movies" -l ro
+
+# Simulate extraction without writing files to disk (Dry Run)
+cinesub extract "/path/to/season1" -l en --dry-run
+
+# Overwrite existing companion .srt files
+cinesub extract "/path/to/movies" -l ro -f
+```
+
+**Flags & Options:**
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `PATH` | *required* | Path to video file or directory |
+| `-l, --language` | `all` | Target language code (e.g. `ro`, `en`) or `all` |
+| `-f, --force` | `False` | Overwrite existing companion `.srt` files on disk |
+| `-d, --dry-run` | `False` | Simulate extraction without writing files |
+| `--verbose` | `False` | Enable debug logging |
+
+---
+
+### 5. `cinesub config` — Diagnostics
+
+Inspects detected API keys, rate limits, default language, and checks whether `ffmpeg` and `ffprobe` are located on your system PATH.
 
 ```bash
 cinesub config
@@ -200,7 +280,12 @@ cinesub config
 - **Rate Limits**:
   - **OpenSubtitles.com**: Official API limit is 5 req/s. CineSub enforces a safe client-side rate limit of **4.0 req/s**.
   - **SubDL.com**: Official API limit is 600 req/min (10 req/s). CineSub enforces **8.0 req/s**.
+  - **SubSource.net**: Official API limit is 60 req/min (1 req/s). CineSub enforces **1.0 req/s**.
+  - **Subs.ro**: Safe client-side rate limit of **2.0 req/s**.
+  - **BetaSeries.com**: Safe client-side rate limit of **2.0 req/s**.
+  - **TMDb**: Safe client-side rate limit of **4.0 req/s**.
   - **HTTP 429 Handling**: Token-bucket rate limiters automatically pause all concurrent threads and back off according to `Retry-After` response headers.
+- **Embedded Subtitles**: Inspects container streams via `ffprobe` and extracts text tracks with `ffmpeg` without altering source media.
 - **Hash Algorithm**: Uses OpenSubtitles' 64-bit checksum over the first and last 64 KB of the file added to the total file size with vectorized 1-shot unpacking.
 - **HTTP Client**: Uses `httpx` with persistent connection pooling, HTTP/2 support, and retry handlers.
 - **JSON Engine**: `orjson` is used for fast serialization and deserialization.
@@ -209,10 +294,4 @@ cinesub config
   - Automatically skips media with existing valid subtitles (unless `-f, --force` is passed) for efficient incremental cron executions.
   - Supports Plex/Emby language suffix convention (`-S, --lang-suffix`, e.g. `movie.ro.srt`).
   - Employs atomic file replacement (`os.replace`) to prevent partial read race conditions with Plex Media Scanner.
-- **Archive Extraction**: SubDL `.zip` packages are unpacked in-memory using `io.BytesIO` and `zipfile.ZipFile`.
-
----
-
-## License
-
-MIT License. See [LICENSE](LICENSE) for details.
+- **Archive Extraction & Bomb Protection**: Archive packages (`.zip`) from SubDL, SubSource, Subs.ro, and BetaSeries are unpacked in-memory with strict uncompressed size limits (max 10MB) to protect against decompression bombs.

@@ -19,6 +19,8 @@ class VideoMetadata:
     is_episode: bool = False
     moviehash: str | None = None
     file_size: int = 0
+    imdb_id: str | None = None
+    tmdb_id: int | None = None
 
 
 @dataclass

@@ -104,6 +104,11 @@ class OpenSubtitlesService:
 
         try:
             params: dict[str, Any] = {"query": video_meta.title, "languages": language}
+            if video_meta.imdb_id:
+                clean_imdb = video_meta.imdb_id.lower().replace("tt", "")
+                if clean_imdb.isdigit():
+                    params["imdb_id"] = int(clean_imdb)
+
             if video_meta.is_episode:
                 params["type"] = "episode"
                 if video_meta.season:
@@ -143,11 +148,11 @@ class OpenSubtitlesService:
         if resp.status_code != 200:
             return []
 
-        data = orjson.loads(resp.content)
+        response_payload = orjson.loads(resp.content)
         results: list[SubtitleMatch] = []
 
-        for item in data.get("data", []):
-            attr = item.get("attributes", {})
+        for candidate_entry in response_payload.get("data", []):
+            attr = candidate_entry.get("attributes", {})
             files = attr.get("files", [])
             if not files:
                 continue
@@ -168,7 +173,7 @@ class OpenSubtitlesService:
 
             results.append(
                 SubtitleMatch(
-                    id=str(item.get("id", file_id)),
+                    id=str(candidate_entry.get("id", file_id)),
                     provider="opensubtitles",
                     language=attr.get("language", language),
                     release_name=release_name,
@@ -196,10 +201,17 @@ class OpenSubtitlesService:
             ticket_url,
             content=orjson.dumps(payload),
         )
+        if ticket_resp.status_code == 406:
+            try:
+                msg = orjson.loads(ticket_resp.content).get("message", "Download quota exceeded")
+            except Exception:
+                msg = "Download quota exceeded"
+            raise RuntimeError(f"OpenSubtitles download quota exhausted: {msg}")
+
         ticket_resp.raise_for_status()
 
-        ticket_data = orjson.loads(ticket_resp.content)
-        download_url = ticket_data.get("link")
+        ticket_payload = orjson.loads(ticket_resp.content)
+        download_url = ticket_payload.get("link")
         if not download_url:
             raise RuntimeError("OpenSubtitles returned no download link.")
 
@@ -209,6 +221,11 @@ class OpenSubtitlesService:
         content = file_resp.content
         if content.startswith(GZIP_MAGIC_BYTES):
             content = gzip.decompress(content)
+
+        if len(content) > 10 * 1024 * 1024:
+            raise ValueError(
+                f"OpenSubtitles payload exceeds safe threshold ({len(content)} bytes, max 10MB)."
+            )
 
         clean_bytes = decode_and_normalize_subtitle_content(content)
 

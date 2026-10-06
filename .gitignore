@@ -60,3 +60,5 @@ cover/
 *.synced.tmp.srt
 
 .agents/
+
+GEMINI.md
