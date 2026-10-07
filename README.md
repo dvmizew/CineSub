@@ -51,16 +51,16 @@ Download the pre-compiled, self-contained executable for your platform directly 
 
 👉 **[Download Latest CineSub Release](https://github.com/dvmizew/CineSub/releases/latest)**
 
-#### Linux / macOS
+#### Linux (x86_64)
 ```bash
-# Download binary directly from releases
-curl -L -o cinesub https://github.com/dvmizew/CineSub/releases/latest/download/cinesub
+# Download latest standalone binary
+curl -L -o cinesub https://github.com/dvmizew/CineSub/releases/latest/download/cinesub-linux-x86_64
 chmod +x cinesub
 sudo mv cinesub /usr/local/bin/
 ```
 
-#### Windows
-Download `cinesub.exe` from **[GitHub Releases](https://github.com/dvmizew/CineSub/releases/latest)** and place it in your `PATH` or directly inside your media folder.
+#### Windows (x86_64)
+Download `cinesub-windows-x86_64.exe` from **[GitHub Releases](https://github.com/dvmizew/CineSub/releases/latest)** and place it in your `PATH` or directly inside your media folder.
 
 ---
 
@@ -161,7 +161,7 @@ cinesub download "/path/to/movies" -l ro -j report.jsonl
 | :--- | :--- | :--- |
 | `PATH` | *required* | Path to a video file or a directory containing video files |
 | `-l, --language` | `en` | Subtitle language (ISO 639-1 code, e.g. `ro`, `en`, `es`) |
-| `-p, --provider` | `all` | Search provider: `all`, `opensubtitles`, `subdl`, `subsource`, `subsro`, or `betaseries` |
+| `-p, --provider` | `all` | Search provider: `all`, `opensubtitles`, `subdl`, `subsource`, `subsro`, `betaseries`, `gestdown`, `bsplayer`, `animetosho`, or `assrt` |
 | `-S, --lang-suffix` | `False` | Save subtitle with language tag for Plex/Emby (e.g. `movie.ro.srt`) |
 | `-d, --dry-run` | `False` | Simulate search and matching without downloading or modifying files |
 | `-t, --threads` | `4` | Number of concurrent worker threads for batch processing |
@@ -199,7 +199,7 @@ House.of.the.Dragon.S02E01.1080p_3_opensubtitles.srt
 | `PATH` | *required* | Path to video file or directory |
 | `-l, --language` | `en` | Subtitle language code |
 | `-n, --limit` | `5` | Number of subtitle variations to download (1–20) |
-| `-p, --provider` | `all` | Provider filter (`all`, `opensubtitles`, `subdl`, `subsource`, `subsro`, `betaseries`) |
+| `-p, --provider` | `all` | Provider filter: `all`, `opensubtitles`, `subdl`, `subsource`, `subsro`, `betaseries`, `gestdown`, `bsplayer`, `animetosho`, or `assrt` |
 | `-d, --dry-run` | `False` | Simulate search without downloading files |
 | `-t, --threads` | `4` | Number of concurrent worker threads |
 | `-j, --json` | `None` | Save structured report to a JSON or JSONL file |
