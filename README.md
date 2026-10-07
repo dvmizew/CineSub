@@ -1,37 +1,42 @@
 # CineSub
 
-Automated subtitle downloader and audio-waveform synchronizer for movies and TV series.
+Automated multi-provider subtitle downloader and media library management CLI for movies and TV series.
 
-CineSub searches subtitle providers (**OpenSubtitles.com** and **SubDL**), matches files using exact 64-bit video hashes (`OSHash`) or release metadata, downloads `.srt` files, and aligns subtitle timings directly to dialogue audio via `ffsubsync`.
+CineSub searches across top subtitle providers (**OpenSubtitles.com**, **SubDL**, **SubSource**, **Subs.ro**, **BetaSeries**, **Gestdown**, **BSPlayer**, **AnimeTosho**, and **Assrt.net**), matches files using exact 64-bit video hashes (`OSHash`) or release metadata enriched via **TMDb**, validates subtitle timing invariants against video duration, and downloads clean, UTF-8 normalized `.srt` companion subtitles.
 
-Supports single files or batch processing of entire folders with multithreading and automatic rate limiting.
+Supports single video files or batch processing of entire media folders with multithreading and automatic token-bucket rate limiting.
 
 ---
 
 ## How It Works
 
 ```
-Video File ──► [ 1. Compute 64-bit OSHash ] ──► Exact match on OpenSubtitles?
+Video File ──► [ 1. Compute 64-bit OSHash ] ──► Exact hash match across providers?
                      │                                   │
                     No                                  Yes
                      ▼                                   ▼
-             [ 2. Parse Filename ]              Download Subtitle (.srt)
-             (Title, Year, Episode,                      │
-              Resolution, Release Group)                 │
-                     │                                   │
-                     ▼                                   ▼
-          Query SubDL & OpenSubtitles         [ 4. Audio Synchronization ]
-                     │                        Extract speech audio with ffmpeg
-                     ▼                        Shift timestamps with ffsubsync
-          Score candidates with RapidFuzz                │
-                     │                                   ▼
-                     └─────────────────────────► Final Synchronized Subtitle
+             [ 2. Parse Metadata & TMDb ]       Download Highest-Scoring Subtitle
+             (Title, Year, Season/Episode,               │
+              Resolution, Release Group, IMDb ID)        ▼
+                     │                          [ 4. Validate & Normalize ]
+                     ▼                          • Timing invariant check vs duration
+          Query Multi-Provider APIs             • UTF-8 encoding normalization
+          (OS, SubDL, SubSource, Subs.ro,       • Downgrade protection check
+           BetaSeries, Gestdown, BSPlayer,               │
+           AnimeTosho, Assrt.net)                        ▼
+                     │                          Atomic POSIX file replace (.srt)
+                     ▼                                   │
+          Score candidates with RapidFuzz                ▼
+          & Ecosystem Group Clusters            Final Verified Subtitle
+                     │
+                     └─────────────────────────►
 ```
 
-1. **Exact Hash Match**: Computes the 64-bit checksum over the video header and footer. If found on OpenSubtitles, timing is typically already tailored for that specific encode.
-2. **Metadata Fallback**: If hash matching yields no results, `guessit` extracts media metadata (title, season/episode, release group, source) to query SubDL and OpenSubtitles. Results are ranked by release similarity using `rapidfuzz`.
-3. **Audio-Based Waveform Sync**: Runs `ffsubsync` against the video's audio track to detect Voice Activity (VAD) and recalculate timestamp offsets and framerate drift, overwriting the file with a synchronized `.srt`.
-4. **Thread-Safe Rate Limiting**: Ensures concurrent batch jobs never exceed provider thresholds (4.0 req/s for OpenSubtitles, 8.0 req/s for SubDL) with automatic exponential backoff on HTTP 429.
+1. **Exact Hash Match**: Computes the 64-bit checksum over the video header and footer. If found on OpenSubtitles, BSPlayer, or supported APIs, timing is typically already tailored for that specific encode.
+2. **Metadata Fallback & TMDb Enrichment**: If hash matching yields no results, `guessit` extracts media metadata (title, season/episode, release group, source) and enriches it via TMDb to resolve IMDb IDs.
+3. **Multi-Provider Search & Heuristic Scoring**: Subtitle candidates from all active providers are ranked by release group clusters, exact token boundaries, and short-title penalties using `rapidfuzz`.
+4. **Timing Validation & Atomic Writes**: Validates maximum subtitle timestamps against video duration to eliminate cross-movie collisions, and saves `.srt` files using atomic POSIX replacement (`os.replace`).
+5. **Thread-Safe Rate Limiting**: Ensures concurrent batch jobs strictly respect provider thresholds (4.0 req/s OpenSubtitles, 8.0 req/s SubDL, 1.0 req/s SubSource, 2.0 req/s Subs.ro, 2.0 req/s BetaSeries, 2.0 req/s Gestdown, 2.0 req/s BSPlayer, 2.0 req/s AnimeTosho, 0.33 req/s Assrt, 4.0 req/s TMDb) with synchronized backoff on HTTP 429.
 
 ---
 
@@ -39,7 +44,7 @@ Video File ──► [ 1. Compute 64-bit OSHash ] ──► Exact match on OpenS
 
 ### 1. System Dependency
 
-`ffmpeg` is required for extracting the audio stream during synchronization.
+`ffmpeg` and `ffprobe` are required for container subtitle extraction (`cinesub extract`) and video duration inspection.
 
 - **Ubuntu / Debian**: `sudo apt install ffmpeg`
 - **Arch Linux**: `sudo pacman -S ffmpeg`
@@ -61,12 +66,18 @@ pip install -e .
 
 ## Configuration & API Credentials
 
-CineSub integrates with two major subtitle provider APIs. You can obtain free API keys from:
-
 | Provider | API Endpoint | Documentation & API Key Registration | Rate Limit |
 | :--- | :--- | :--- | :--- |
 | **OpenSubtitles.com** | `https://api.opensubtitles.com/api/v1` | [OpenSubtitles API Portal](https://www.opensubtitles.com/consumers) | 4.0 req/s (Client Cap) / 5 req/s max |
 | **SubDL** | `https://api.subdl.com/api/v1` | [SubDL API Portal](https://subdl.com/api) | 8.0 req/s (600 req/min Cap) |
+| **SubSource** | `https://api.subsource.net/api/v1` | [SubSource Account Portal](https://subsource.net) | 1.0 req/s (60 req/min Cap) |
+| **Subs.ro** | `https://api.subs.ro/v1.0` | [Subs.ro API Documentation](https://api.subs.ro) | 2.0 req/s (Safe Client Cap) |
+| **BetaSeries** | `https://api.betaseries.com` | [BetaSeries API Portal](https://www.betaseries.com/api) | 2.0 req/s (Safe Client Cap) |
+| **Gestdown** | `https://api.gestdown.info` | [Gestdown / Addic7ed Proxy](https://api.gestdown.info) | 2.0 req/s (Public, No Key Required) |
+| **BSPlayer** | `http://s1.api.bsplayer-subtitles.com/v1.php` | BSPlayer Community 64-bit SOAP API | 2.0 req/s (Public, No Key Required) |
+| **AnimeTosho** | `https://feed.animetosho.org/json` | [AnimeTosho Feed & Attachments](https://animetosho.org) | 2.0 req/s (Public, No Key Required) |
+| **Assrt.net** | `https://api.assrt.net/v1` | [Assrt.net (Shooter.cn) API](https://assrt.net) | 0.33 req/s (20 req/min Cap) |
+| **TMDb** | `https://api.themoviedb.org/3` | [TMDb Developer Settings](https://developer.themoviedb.org) | 4.0 req/s (Client Cap) |
 
 Create a `.env` file in your working directory or home directory:
 
@@ -80,6 +91,19 @@ OPENSUBTITLES_API_KEY=your_opensubtitles_api_key
 
 # SubDL API Key (https://subdl.com)
 SUBDL_API_KEY=your_subdl_api_key
+
+# SubSource API Key (https://subsource.net)
+SUBSOURCE_API_KEY=your_subsource_api_key
+
+# Subs.ro API Key (https://subs.ro)
+SUBSRO_API_KEY=your_subsro_api_key
+
+# BetaSeries API Key (https://www.betaseries.com/api)
+BETASERIES_API_KEY=your_betaseries_api_key
+
+# TMDb Read Access Token or API Key (https://www.themoviedb.org/settings/api)
+TMDB_READ_ACCESS_TOKEN=your_tmdb_read_access_token
+TMDB_ACCOUNT_ID=your_tmdb_account_id
 
 # Default language (ISO 639-1 code, e.g. en, ro, es, fr, de)
 CINESUB_DEFAULT_LANGUAGE=en
@@ -97,32 +121,27 @@ cinesub config
 
 ## Usage Guide
 
-### 1. `cinesub sync` — Search & Download (Optional Audio Sync)
+### 1. `cinesub download` (or `cinesub sync`) — Search & Download Best Subtitle
 
-Downloads the single best candidate and saves it matching the video filename (`movie.mp4` $\to$ `movie.srt`).
+Downloads the single best subtitle candidate across configured providers and saves it matching the video filename (`movie.mp4` $\to$ `movie.srt`).
 
-By default, timestamps are preserved exactly as provided by the author. Pass `--sync` / `-s` to align subtitle timings against the dialogue audio stream using `ffsubsync`.
-
-Supports single video files or entire directories for batch processing.
+Supports single video files or entire directories for batch processing with multithreading.
 
 ```bash
-# Download the best Romanian subtitle (keeping original timestamps)
-cinesub sync "Dune.Part.Two.2024.1080p.WEBRip.x264-FGT.mp4" -l ro
-
-# Download and align audio synchronization with ffsubsync
-cinesub sync "Dune.Part.Two.2024.1080p.WEBRip.x264-FGT.mp4" -l ro --sync
+# Download the best Romanian subtitle for a movie
+cinesub download "Dune.Part.Two.2024.1080p.WEBRip.x264-FGT.mp4" -l ro
 
 # Download for a full TV series season with 8 parallel worker threads
-cinesub sync "/path/to/House.of.the.Dragon.S02" -l ro -t 8
+cinesub download "/path/to/House.of.the.Dragon.S02" -l ro -t 8
 
-# Sync audio and keep original subtitle backup (.orig.srt)
-cinesub sync "The.Last.of.Us.S01E01.720p.HDTV.mkv" -l en --sync --backup
+# Save with Plex/Emby language suffix (e.g., movie.ro.srt)
+cinesub download "The.Last.of.Us.S01E01.720p.HDTV.mkv" -l ro -S
 
 # Full simulation without downloading or modifying files (Dry Run)
-cinesub sync "/path/to/movies" -l ro --dry-run
+cinesub download "/path/to/movies" -l ro --dry-run
 
 # Save batch report as formatted indented JSON or streaming JSONL
-cinesub sync "/path/to/movies" -l ro -j report.jsonl
+cinesub download "/path/to/movies" -l ro -j report.jsonl
 ```
 
 **Flags & Options:**
@@ -130,12 +149,9 @@ cinesub sync "/path/to/movies" -l ro -j report.jsonl
 | :--- | :--- | :--- |
 | `PATH` | *required* | Path to a video file or a directory containing video files |
 | `-l, --language` | `en` | Subtitle language (ISO 639-1 code, e.g. `ro`, `en`, `es`) |
-| `-p, --provider` | `all` | Search provider: `all`, `opensubtitles`, or `subdl` |
-| `-s, --sync` | `False` | Align subtitle timestamps against video audio |
-| `-e, --engine` | `ffsubsync` | Synchronization engine: `ffsubsync` (Python/FFmpeg) or `alass` (Rust) |
+| `-p, --provider` | `all` | Search provider: `all`, `opensubtitles`, `subdl`, `subsource`, `subsro`, or `betaseries` |
 | `-S, --lang-suffix` | `False` | Save subtitle with language tag for Plex/Emby (e.g. `movie.ro.srt`) |
 | `-d, --dry-run` | `False` | Simulate search and matching without downloading or modifying files |
-| `-b, --backup` | `False` | Save unsynchronized original as `<name>.orig.srt` |
 | `-t, --threads` | `4` | Number of concurrent worker threads for batch processing |
 | `-j, --json` | `None` | Save structured report to a JSON or JSONL file |
 | `-f, --force` | `False` | Overwrite existing subtitle files (default: skips existing subtitles) |
@@ -171,7 +187,7 @@ House.of.the.Dragon.S02E01.1080p_3_opensubtitles.srt
 | `PATH` | *required* | Path to video file or directory |
 | `-l, --language` | `en` | Subtitle language code |
 | `-n, --limit` | `5` | Number of subtitle variations to download (1–20) |
-| `-p, --provider` | `all` | Provider filter (`all`, `opensubtitles`, `subdl`) |
+| `-p, --provider` | `all` | Provider filter (`all`, `opensubtitles`, `subdl`, `subsource`, `subsro`, `betaseries`) |
 | `-d, --dry-run` | `False` | Simulate search without downloading files |
 | `-t, --threads` | `4` | Number of concurrent worker threads |
 | `-j, --json` | `None` | Save structured report to a JSON or JSONL file |
@@ -180,9 +196,74 @@ House.of.the.Dragon.S02E01.1080p_3_opensubtitles.srt
 
 ---
 
-### 3. `cinesub config` — Diagnostics
+### 3. `cinesub tmdb` — The Movie Database Sync & Bookmarks / Watchlist
 
-Inspects detected API keys, rate limits, default language, and checks whether `ffmpeg` is located on your system PATH.
+Search TMDb for video files or directory names in a folder and optionally synchronize them directly to your TMDb Watchlist (Bookmarks) or Favorites:
+
+```bash
+# Query TMDb for media in a folder
+cinesub tmdb "/path/to/Movies"
+
+# Bookmark (add to Watchlist) all matched movies in TMDb
+cinesub tmdb "/path/to/Movies" -b
+
+# Scan directory / folder names directly (for libraries organized as movie folders)
+cinesub tmdb "/path/to/Movies" --by-folder -b
+
+# Add all matched movies to both TMDb Favorites and Watchlist
+cinesub tmdb "/path/to/Movies" --favorite --bookmark
+
+# Simulate without altering your TMDb account lists (Dry Run)
+cinesub tmdb "/path/to/Movies" -b --dry-run
+```
+
+**Flags & Options:**
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `PATH` | *required* | Path to video file or directory |
+| `-b, --bookmark` | `False` | Add matched media to your TMDb Watchlist / Bookmarks (alias for `-w`) |
+| `-w, --watchlist` | `False` | Add matched media to your TMDb Watchlist |
+| `-f, --favorite` | `False` | Add matched media to your TMDb Favorites list |
+| `-F, --by-folder` | `False` | Search TMDb using folder / directory names instead of video filenames |
+| `-d, --dry-run` | `False` | Simulate search without submitting modifications to TMDb |
+| `--verbose` | `False` | Enable debug logging |
+
+---
+
+### 4. `cinesub extract` — Embedded Subtitle Extraction
+
+Inspects video containers (`.mkv`, `.mp4`, `.m2ts`, etc.) using `ffprobe` and extracts embedded text-based subtitle tracks (`subrip`, `srt`, `ass`, `ssa`, `mov_text`, `webvtt`) directly into UTF-8 normalized companion `.srt` files matching Plex / Emby conventions (`<video_stem>.<lang>.srt`).
+
+**Video File Immutability Guarantee**: CineSub never modifies, re-encodes, or touches original video containers on disk. Subtitle streams are read-only mapped and written into external companion files.
+
+```bash
+# Extract all embedded subtitle streams from a movie
+cinesub extract "Oppenheimer.2023.2160p.UHD.Remux.mkv"
+
+# Extract only Romanian embedded subtitle tracks
+cinesub extract "/path/to/movies" -l ro
+
+# Simulate extraction without writing files to disk (Dry Run)
+cinesub extract "/path/to/season1" -l en --dry-run
+
+# Overwrite existing companion .srt files
+cinesub extract "/path/to/movies" -l ro -f
+```
+
+**Flags & Options:**
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `PATH` | *required* | Path to video file or directory |
+| `-l, --language` | `all` | Target language code (e.g. `ro`, `en`) or `all` |
+| `-f, --force` | `False` | Overwrite existing companion `.srt` files on disk |
+| `-d, --dry-run` | `False` | Simulate extraction without writing files |
+| `--verbose` | `False` | Enable debug logging |
+
+---
+
+### 5. `cinesub config` — Diagnostics
+
+Inspects detected API keys, rate limits, default language, and checks whether `ffmpeg` and `ffprobe` are located on your system PATH.
 
 ```bash
 cinesub config
@@ -195,12 +276,15 @@ cinesub config
 - **Subtitle Sanitization & Encoding**:
   - Automatically normalizes character encoding to clean UTF-8 (without BOM) using `charset-normalizer`, correctly decoding CP1250, CP1251, ISO-8859, and Asian charsets.
   - Validates and re-indexes subtitle sequence numbers and timestamp formatting with `srt`.
-- **Audio Alignment Engines**:
-  - Supports **`ffsubsync`** (VAD cross-correlation) and **`alass`** (Dynamic Programming).
 - **Rate Limits**:
   - **OpenSubtitles.com**: Official API limit is 5 req/s. CineSub enforces a safe client-side rate limit of **4.0 req/s**.
   - **SubDL.com**: Official API limit is 600 req/min (10 req/s). CineSub enforces **8.0 req/s**.
+  - **SubSource.net**: Official API limit is 60 req/min (1 req/s). CineSub enforces **1.0 req/s**.
+  - **Subs.ro**: Safe client-side rate limit of **2.0 req/s**.
+  - **BetaSeries.com**: Safe client-side rate limit of **2.0 req/s**.
+  - **TMDb**: Safe client-side rate limit of **4.0 req/s**.
   - **HTTP 429 Handling**: Token-bucket rate limiters automatically pause all concurrent threads and back off according to `Retry-After` response headers.
+- **Embedded Subtitles**: Inspects container streams via `ffprobe` and extracts text tracks with `ffmpeg` without altering source media.
 - **Hash Algorithm**: Uses OpenSubtitles' 64-bit checksum over the first and last 64 KB of the file added to the total file size with vectorized 1-shot unpacking.
 - **HTTP Client**: Uses `httpx` with persistent connection pooling, HTTP/2 support, and retry handlers.
 - **JSON Engine**: `orjson` is used for fast serialization and deserialization.
@@ -209,10 +293,4 @@ cinesub config
   - Automatically skips media with existing valid subtitles (unless `-f, --force` is passed) for efficient incremental cron executions.
   - Supports Plex/Emby language suffix convention (`-S, --lang-suffix`, e.g. `movie.ro.srt`).
   - Employs atomic file replacement (`os.replace`) to prevent partial read race conditions with Plex Media Scanner.
-- **Archive Extraction**: SubDL `.zip` packages are unpacked in-memory using `io.BytesIO` and `zipfile.ZipFile`.
-
----
-
-## License
-
-MIT License. See [LICENSE](LICENSE) for details.
+- **Archive Extraction & Bomb Protection**: Archive packages (`.zip`) from SubDL, SubSource, Subs.ro, and BetaSeries are unpacked in-memory with strict uncompressed size limits (max 10MB) to protect against decompression bombs.

@@ -1,21 +1,19 @@
-"""OpenSubtitles.com REST API v1 Client."""
-
 from __future__ import annotations
 
-import gzip
 import os
+import time
 from pathlib import Path
 from typing import Any
 
 import httpx
 import orjson
 
-from cinesub.core.constants import GZIP_MAGIC_BYTES, OPENSUBTITLES_API_URL, USER_AGENT
+from cinesub.core.constants import OPENSUBTITLES_API_URL, USER_AGENT
 from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import OPENSUBTITLES_LIMITER
-from cinesub.core.utils import decode_and_normalize_subtitle_content, score_subtitle_candidate
+from cinesub.core.utils import save_subtitle_to_disk, score_subtitle_candidate
 
 
 class OpenSubtitlesService:
@@ -27,6 +25,11 @@ class OpenSubtitlesService:
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key)
+
+    @property
+    def is_available(self) -> bool:
+        """Check if OpenSubtitles is not currently circuit-broken due to connection outage."""
+        return OPENSUBTITLES_LIMITER.is_available
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -71,17 +74,22 @@ class OpenSubtitlesService:
                     OPENSUBTITLES_LIMITER.trigger_cooldown(wait_sec)
 
                 return resp
+            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+                OPENSUBTITLES_LIMITER.mark_unreachable(60.0)
+                LOG.warning(f"OpenSubtitles server unreachable ({exc}). Skipping for 60s.")
+                raise
             except httpx.RequestError as exc:
                 if attempt == max_retries - 1:
                     raise
-                LOG.debug(f"OpenSubtitles network error ({exc}), retrying...")
+                backoff_delay = 0.5 * (2**attempt)
+                LOG.debug(f"OpenSubtitles network error ({exc}), retrying in {backoff_delay:.1f}s")
+                time.sleep(backoff_delay)
 
         raise RuntimeError("OpenSubtitles request failed after retries.")
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search OpenSubtitles by moviehash first, then fallback to text query."""
-        if not self.is_configured:
-            LOG.debug("OpenSubtitles API key not configured. Skipping.")
+        if not self.is_configured or not self.is_available:
             return []
 
         matches: list[SubtitleMatch] = []
@@ -99,11 +107,16 @@ class OpenSubtitlesService:
                     if m.file_id not in seen_file_ids:
                         seen_file_ids.add(m.file_id)
                         matches.append(m)
-            except Exception as exc:
+            except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
                 LOG.debug(f"OpenSubtitles hash search error: {exc}")
 
         try:
             params: dict[str, Any] = {"query": video_meta.title, "languages": language}
+            if video_meta.imdb_id:
+                clean_imdb = video_meta.imdb_id.lower().replace("tt", "")
+                if clean_imdb.isdigit():
+                    params["imdb_id"] = int(clean_imdb)
+
             if video_meta.is_episode:
                 params["type"] = "episode"
                 if video_meta.season:
@@ -125,7 +138,7 @@ class OpenSubtitlesService:
                 if m.file_id not in seen_file_ids:
                     seen_file_ids.add(m.file_id)
                     matches.append(m)
-        except Exception as exc:
+        except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"OpenSubtitles query search error: {exc}")
 
         matches.sort(key=lambda m: m.score, reverse=True)
@@ -143,11 +156,11 @@ class OpenSubtitlesService:
         if resp.status_code != 200:
             return []
 
-        data = orjson.loads(resp.content)
+        response_payload = orjson.loads(resp.content)
         results: list[SubtitleMatch] = []
 
-        for item in data.get("data", []):
-            attr = item.get("attributes", {})
+        for candidate_entry in response_payload.get("data", []):
+            attr = candidate_entry.get("attributes", {})
             files = attr.get("files", [])
             if not files:
                 continue
@@ -168,7 +181,7 @@ class OpenSubtitlesService:
 
             results.append(
                 SubtitleMatch(
-                    id=str(item.get("id", file_id)),
+                    id=str(candidate_entry.get("id", file_id)),
                     provider="opensubtitles",
                     language=attr.get("language", language),
                     release_name=release_name,
@@ -196,24 +209,21 @@ class OpenSubtitlesService:
             ticket_url,
             content=orjson.dumps(payload),
         )
+        if ticket_resp.status_code == 406:
+            try:
+                msg = orjson.loads(ticket_resp.content).get("message", "Download quota exceeded")
+            except orjson.JSONDecodeError:
+                msg = "Download quota exceeded"
+            raise RuntimeError(f"OpenSubtitles download quota exhausted: {msg}")
+
         ticket_resp.raise_for_status()
 
-        ticket_data = orjson.loads(ticket_resp.content)
-        download_url = ticket_data.get("link")
+        ticket_payload = orjson.loads(ticket_resp.content)
+        download_url = ticket_payload.get("link")
         if not download_url:
             raise RuntimeError("OpenSubtitles returned no download link.")
 
         file_resp = self._send_request("GET", download_url)
         file_resp.raise_for_status()
 
-        content = file_resp.content
-        if content.startswith(GZIP_MAGIC_BYTES):
-            content = gzip.decompress(content)
-
-        clean_bytes = decode_and_normalize_subtitle_content(content)
-
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temp_dest = destination.parent / f".{destination.name}.tmp"
-        temp_dest.write_bytes(clean_bytes)
-        os.replace(temp_dest, destination)
-        return destination
+        return save_subtitle_to_disk(file_resp.content, destination)

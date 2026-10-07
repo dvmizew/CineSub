@@ -16,7 +16,12 @@ SESSION = httpx.Client(
             keepalive_expiry=30.0,
         ),
     ),
-    timeout=httpx.Timeout(timeout=float(DEFAULT_TIMEOUT)),
+    timeout=httpx.Timeout(
+        connect=4.0,
+        read=max(float(DEFAULT_TIMEOUT), 25.0),
+        write=15.0,
+        pool=10.0,
+    ),
     follow_redirects=True,
     headers={"User-Agent": USER_AGENT},
 )

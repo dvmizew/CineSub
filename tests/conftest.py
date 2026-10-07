@@ -1,5 +1,3 @@
-"""Shared test fixtures for CineSub."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,8 +12,8 @@ def sample_video_file(tmp_path: Path) -> Path:
     """Create a dummy video file of sufficient size (>= 128KB) for hash calculation."""
     video_file = tmp_path / "Inception.2010.1080p.BluRay.x264-SPARKS.mp4"
     chunk_size = 65536
-    data = b"\x00" * chunk_size + b"\x01" * chunk_size
-    video_file.write_bytes(data)
+    dummy_video_payload = b"\x00" * chunk_size + b"\x01" * chunk_size
+    video_file.write_bytes(dummy_video_payload)
     return video_file
 
 
@@ -24,8 +22,8 @@ def sample_episode_file(tmp_path: Path) -> Path:
     """Create a dummy TV episode video file."""
     video_file = tmp_path / "Breaking.Bad.S01E01.720p.HDTV.x264-CTU.mkv"
     chunk_size = 65536
-    data = b"\x02" * (chunk_size * 2)
-    video_file.write_bytes(data)
+    dummy_episode_payload = b"\x02" * (chunk_size * 2)
+    video_file.write_bytes(dummy_episode_payload)
     return video_file
 
 

@@ -1,10 +1,7 @@
-"""SubDL.com REST API Client."""
-
 from __future__ import annotations
 
-import io
 import os
-import zipfile
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -15,14 +12,15 @@ import orjson
 from cinesub.core.constants import (
     SUBDL_API_URL,
     SUBDL_DL_URL,
-    SUBTITLE_EXTENSIONS,
-    ZIP_MAGIC_BYTES,
 )
 from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import SUBDL_LIMITER
-from cinesub.core.utils import decode_and_normalize_subtitle_content, score_subtitle_candidate
+from cinesub.core.utils import (
+    save_subtitle_to_disk,
+    score_subtitle_candidate,
+)
 
 
 class SubdlService:
@@ -34,6 +32,11 @@ class SubdlService:
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key)
+
+    @property
+    def is_available(self) -> bool:
+        """Check if SubDL is not currently circuit-broken due to connection outage."""
+        return SUBDL_LIMITER.is_available
 
     def _send_request(
         self,
@@ -59,27 +62,36 @@ class SubdlService:
                     continue
 
                 return resp
+            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+                SUBDL_LIMITER.mark_unreachable(60.0)
+                LOG.warning(f"SubDL server unreachable ({exc}). Skipping for 60s.")
+                raise
             except httpx.RequestError as exc:
                 if attempt == max_retries - 1:
                     raise
-                LOG.debug(f"SubDL network error ({exc}), retrying...")
+                backoff_delay = 0.5 * (2**attempt)
+                LOG.debug(f"SubDL network error ({exc}), retrying in {backoff_delay:.1f}s...")
+                time.sleep(backoff_delay)
 
         raise RuntimeError("SubDL request failed after retries.")
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search SubDL for matching subtitles."""
-        if not self.is_configured:
-            LOG.debug("SubDL API key not configured. Skipping.")
+        if not self.is_configured or not self.is_available:
             return []
 
         url = f"{SUBDL_API_URL}/subtitles"
         params: dict[str, Any] = {
             "api_key": self.api_key,
             "film_name": video_meta.title,
+            "file_name": video_meta.file_path.name,
             "languages": language.upper(),
             "releases": 1,
             "hi": 1,
         }
+
+        if video_meta.imdb_id:
+            params["imdb_id"] = video_meta.imdb_id
 
         if video_meta.is_episode:
             params["type"] = "tv"
@@ -97,18 +109,18 @@ class SubdlService:
             if resp.status_code != 200:
                 return []
 
-            data = orjson.loads(resp.content)
-            if not data.get("status"):
+            response_payload = orjson.loads(resp.content)
+            if not response_payload.get("status"):
                 return []
 
             results: list[SubtitleMatch] = []
-            for idx, sub in enumerate(data.get("subtitles", [])):
+            for idx, sub_item in enumerate(response_payload.get("subtitles", [])):
                 release_name = (
-                    sub.get("release_name")
-                    or sub.get("name")
+                    sub_item.get("release_name")
+                    or sub_item.get("name")
                     or f"{video_meta.title} Subtitle {idx + 1}"
                 )
-                raw_url = sub.get("download_link") or sub.get("url") or ""
+                raw_url = sub_item.get("download_link") or sub_item.get("url") or ""
                 if raw_url.startswith("http"):
                     dl_url = raw_url
                 else:
@@ -120,26 +132,26 @@ class SubdlService:
                     matched_by_hash=False,
                 )
 
-                sub_id = str(sub.get("id") or sub.get("file_n_id") or f"subdl_{idx}")
+                sub_id = str(sub_item.get("id") or sub_item.get("file_n_id") or f"subdl_{idx}")
                 results.append(
                     SubtitleMatch(
                         id=sub_id,
                         provider="subdl",
-                        language=(sub.get("lang") or language).lower(),
+                        language=(sub_item.get("lang") or language).lower(),
                         release_name=release_name,
                         matched_by_hash=False,
                         download_url=dl_url,
                         file_id=sub_id,
-                        hearing_impaired=bool(sub.get("hi", False)),
-                        fps=sub.get("fps") or sub.get("framerate"),
+                        hearing_impaired=bool(sub_item.get("hi", False)),
+                        fps=sub_item.get("fps") or sub_item.get("framerate"),
                         score=score,
                     )
                 )
 
-            results.sort(key=lambda m: m.score, reverse=True)
+            results.sort(key=lambda match: match.score, reverse=True)
             return results
 
-        except Exception as exc:
+        except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"SubDL search error: {exc}")
             return []
 
@@ -148,33 +160,8 @@ class SubdlService:
         if not subtitle.download_url:
             raise ValueError("SubDL match missing download URL.")
 
-        resp = self._send_request("GET", subtitle.download_url)
+        download_params = {"api_key": self.api_key} if self.api_key else None
+        resp = self._send_request("GET", subtitle.download_url, params=download_params)
         resp.raise_for_status()
 
-        content = resp.content
-        destination.parent.mkdir(parents=True, exist_ok=True)
-
-        if content.startswith(ZIP_MAGIC_BYTES):
-            with io.BytesIO(content) as buf, zipfile.ZipFile(buf) as zf:
-                srt_files = [n for n in zf.namelist() if n.lower().endswith(".srt")]
-                if not srt_files:
-                    all_subs = [
-                        n
-                        for n in zf.namelist()
-                        if any(n.lower().endswith(ext) for ext in SUBTITLE_EXTENSIONS)
-                    ]
-                    if not all_subs:
-                        raise RuntimeError("No subtitle file found in SubDL ZIP archive.")
-                    chosen = all_subs[0]
-                else:
-                    chosen = srt_files[0]
-
-                raw_bytes = zf.read(chosen)
-        else:
-            raw_bytes = content
-
-        clean_bytes = decode_and_normalize_subtitle_content(raw_bytes)
-        temp_dest = destination.parent / f".{destination.name}.tmp"
-        temp_dest.write_bytes(clean_bytes)
-        os.replace(temp_dest, destination)
-        return destination
+        return save_subtitle_to_disk(resp.content, destination)

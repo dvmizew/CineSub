@@ -1,5 +1,3 @@
-"""CineSub - Subtitle search, download, and audio synchronization."""
-
 from importlib.metadata import PackageNotFoundError, version
 
 try:
@@ -7,12 +5,11 @@ try:
 except PackageNotFoundError:
     __version__ = "0.2.0"
 
-from cinesub.modules.downloader import download_and_sync, download_bulk
-from cinesub.modules.syncer import sync_subtitle_audio
+from cinesub.modules.downloader import download_batch, download_bulk, download_subtitle
 
 __all__ = [
     "__version__",
-    "download_and_sync",
+    "download_batch",
     "download_bulk",
-    "sync_subtitle_audio",
+    "download_subtitle",
 ]

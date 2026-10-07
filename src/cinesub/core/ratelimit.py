@@ -18,6 +18,33 @@ class RateLimiter:
         self.last_update = time.monotonic()
         self.lock = threading.Lock()
         self.cooldown_until: float = 0.0
+        self.unreachable_until: float = 0.0
+        self.is_probing: bool = False
+
+    @property
+    def is_available(self) -> bool:
+        """Return True if service is not circuit-broken due to connection outages."""
+        with self.lock:
+            now = time.monotonic()
+            if now < self.unreachable_until:
+                return False
+            if self.is_probing:
+                return False
+            if self.unreachable_until > 0.0:
+                self.is_probing = True
+            return True
+
+    def mark_unreachable(self, seconds: float = 60.0) -> None:
+        """Mark service as temporarily unreachable due to network connection outage."""
+        with self.lock:
+            self.unreachable_until = max(self.unreachable_until, time.monotonic() + seconds)
+            self.is_probing = False
+
+    def mark_recovered(self) -> None:
+        """Mark service as recovered after a successful probe."""
+        with self.lock:
+            self.unreachable_until = 0.0
+            self.is_probing = False
 
     def acquire(self) -> None:
         """Block until a token is available and cooldown expired."""
@@ -55,3 +82,27 @@ OPENSUBTITLES_LIMITER = RateLimiter(rate=4.0, max_burst=1.0)
 
 # SubDL: Official limit is 600 req/min (10 req/sec). Safe client rate: 8.0 req/sec.
 SUBDL_LIMITER = RateLimiter(rate=8.0, max_burst=2.0)
+
+# SubSource: Official limit is 60 req/min (1.0 req/sec). Safe client rate: 1.0 req/sec.
+SUBSOURCE_LIMITER = RateLimiter(rate=1.0, max_burst=1.0)
+
+# TMDb: Official guidance accommodates up to ~40-50 req/s. Safe client rate: 4.0 req/sec.
+TMDB_LIMITER = RateLimiter(rate=4.0, max_burst=2.0)
+
+# Subs.ro: Safe client rate: 2.0 req/sec.
+SUBSRO_LIMITER = RateLimiter(rate=2.0, max_burst=1.0)
+
+# BetaSeries: Safe client rate: 2.0 req/sec.
+BETASERIES_LIMITER = RateLimiter(rate=2.0, max_burst=1.0)
+
+# Gestdown: Addic7ed proxy. Safe client rate: 2.0 req/sec.
+GESTDOWN_LIMITER = RateLimiter(rate=2.0, max_burst=1.0)
+
+# BSPlayer: Hash-based SOAP API. Safe client rate: 2.0 req/sec.
+BSPLAYER_LIMITER = RateLimiter(rate=2.0, max_burst=1.0)
+
+# AnimeTosho: Feed and storage API. Safe client rate: 2.0 req/sec.
+ANIMETOSHO_LIMITER = RateLimiter(rate=2.0, max_burst=1.0)
+
+# Assrt.net: Official limit is 20 req/min (0.33 req/sec). Safe client rate: 0.33 req/sec.
+ASSRT_LIMITER = RateLimiter(rate=0.33, max_burst=1.0)
