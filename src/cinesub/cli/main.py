@@ -9,6 +9,7 @@ from typing import Annotated, Any
 
 from cyclopts import App, Parameter
 from dotenv import load_dotenv
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -204,10 +205,10 @@ def download(
             table.add_column("Property", style="cyan", no_wrap=True)
             table.add_column("Value", style="white")
 
-            table.add_row("Video File", single_result.get("video_file"))
+            table.add_row("Video File", escape(str(single_result.get("video_file") or "")))
             table.add_row(
                 "Detected Title",
-                f"{single_result.get('title')} ({single_result.get('year') or 'N/A'})",
+                escape(f"{single_result.get('title')} ({single_result.get('year') or 'N/A'})"),
             )
             table.add_row("OpenSubtitles Hash", single_result.get("moviehash") or "N/A")
             table.add_row("Selected Provider", matched_subtitle.get("provider", "").upper())
@@ -221,22 +222,21 @@ def download(
                     else "Relevance Score"
                 ),
             )
-            table.add_row("Subtitle Release", matched_subtitle.get("release_name", ""))
+            table.add_row("Subtitle Release", escape(str(matched_subtitle.get("release_name", ""))))
             table.add_row("Language", matched_subtitle.get("language", "").upper())
             score_num = matched_subtitle.get("score")
             table.add_row(
                 "Match Score",
                 f"{score_num:.1f}" if score_num is not None else "100.0",
             )
-            table.add_row("Target SRT Path", matched_subtitle.get("saved_path", ""))
+            table.add_row("Target SRT Path", escape(str(matched_subtitle.get("saved_path", ""))))
 
             CONSOLE.print(table)
             if file_status != "dry_run":
-                CONSOLE.print(
-                    f"\n[bold green]✓ Ready for playback:[/] {matched_subtitle.get('saved_path')}\n"
-                )
+                target_saved = escape(str(matched_subtitle.get("saved_path") or ""))
+                CONSOLE.print(f"\n[bold green]✓ Ready for playback:[/] {target_saved}\n")
             else:
-                simulated_path = matched_subtitle.get("saved_path")
+                simulated_path = escape(str(matched_subtitle.get("saved_path") or ""))
                 CONSOLE.print(f"\n[bold yellow]⚡ Simulated target path:[/] {simulated_path}\n")
         else:
             if report.get("interrupted"):
@@ -266,12 +266,13 @@ def download(
 
             for result_entry in results:
                 file_status = result_entry.get("status")
-                if file_status == "success":
+                video_name = escape(str(result_entry.get("video_file") or ""))
+                if file_status in ("success", "downloaded"):
                     matched_subtitle = result_entry.get("subtitle", {})
                     score_num = matched_subtitle.get("score", 0.0)
                     table.add_row(
                         "[bold green]SUCCESS[/bold green]",
-                        result_entry.get("video_file"),
+                        video_name,
                         matched_subtitle.get("provider", "").upper(),
                         f"Score: {score_num:.1f}",
                     )
@@ -280,24 +281,26 @@ def download(
                     score_num = matched_subtitle.get("score", 0.0)
                     table.add_row(
                         "[bold yellow]DRY-RUN[/bold yellow]",
-                        result_entry.get("video_file"),
+                        video_name,
                         matched_subtitle.get("provider", "").upper(),
                         f"Score: {score_num:.1f}",
                     )
                 elif file_status == "skipped":
                     matched_subtitle = result_entry.get("subtitle", {})
+                    rel_name = escape(str(matched_subtitle.get("release_name", "SRT")))
                     table.add_row(
                         "[bold dim]SKIPPED[/bold dim]",
-                        result_entry.get("video_file"),
+                        video_name,
                         "LOCAL",
-                        f"Exists: {matched_subtitle.get('release_name', 'SRT')}",
+                        f"Exists: {rel_name}",
                     )
                 else:
+                    err_msg = escape(str(result_entry.get("error", "Error"))[:35])
                     table.add_row(
                         "[bold red]FAILED[/bold red]",
-                        result_entry.get("video_file"),
+                        video_name,
                         "-",
-                        result_entry.get("error", "Error")[:35],
+                        err_msg,
                     )
 
             CONSOLE.print(table)
@@ -429,17 +432,19 @@ def bulk(
                 table.add_row(
                     str(rank_idx),
                     sub_candidate.get("provider", "").upper(),
-                    rel_name[:45] + ("..." if len(rel_name) > 45 else ""),
+                    escape(rel_name[:45] + ("..." if len(rel_name) > 45 else "")),
                     f"{sub_candidate.get('score', 0.0):.1f}",
-                    saved_name,
+                    escape(saved_name),
                 )
 
             CONSOLE.print(table)
             saved_loc = path.parent if path.is_file() else path
             if not dry_run:
-                CONSOLE.print(f"\n[bold green]✓ Files saved in:[/] {saved_loc}\n")
+                CONSOLE.print(f"\n[bold green]✓ Files saved in:[/] {escape(str(saved_loc))}\n")
             else:
-                CONSOLE.print(f"\n[bold yellow]⚡ Simulated directory:[/] {saved_loc}\n")
+                CONSOLE.print(
+                    f"\n[bold yellow]⚡ Simulated directory:[/] {escape(str(saved_loc))}\n"
+                )
         else:
             if report.get("interrupted"):
                 dashboard_title = "⏹ CineSub Bulk Interrupted (Ctrl+C)"
@@ -466,6 +471,7 @@ def bulk(
             table.add_column("Subtitles Found", justify="right", style="cyan")
 
             for batch_entry in results:
+                video_name = escape(str(batch_entry.get("video_file") or ""))
                 if batch_entry.get("status") in ("success", "dry_run"):
                     count_str = str(len(batch_entry.get("subtitles", [])))
                     status_str = (
@@ -473,9 +479,9 @@ def bulk(
                         if dry_run
                         else "[bold green]SUCCESS[/bold green]"
                     )
-                    table.add_row(status_str, batch_entry.get("video_file"), count_str)
+                    table.add_row(status_str, video_name, count_str)
                 else:
-                    table.add_row("[bold red]FAILED[/bold red]", batch_entry.get("video_file"), "0")
+                    table.add_row("[bold red]FAILED[/bold red]", video_name, "0")
 
             CONSOLE.print(table)
             CONSOLE.print()
@@ -708,12 +714,12 @@ def extract(
                 output_detail = f"{output_detail} ({entry.get('message', '')})"
 
             table.add_row(
-                entry.get("video_file"),
+                escape(str(entry.get("video_file") or "")),
                 str(entry.get("stream_index")),
                 entry.get("codec"),
                 entry.get("language", "").upper(),
                 status_display,
-                output_detail,
+                escape(output_detail),
             )
 
         CONSOLE.print(table)
@@ -836,7 +842,7 @@ def tmdb(
                 ]
                 if child_subdirs:
                     LOG.info(
-                        f"No video files found in {resolved_path}; scanning "
+                        f"No video files found in {escape(str(resolved_path))}; scanning "
                         f"{len(child_subdirs)} subdirectories by folder name..."
                     )
                     child_subdirs.sort(key=lambda directory: directory.name.lower())
@@ -844,14 +850,15 @@ def tmdb(
                         parse_directory_metadata(directory) for directory in child_subdirs
                     ]
                 else:
+                    folder_label = escape(resolved_path.name)
                     LOG.info(
-                        f"No video files found; querying folder name '{resolved_path.name}' "
+                        f"No video files found; querying folder name '{folder_label}' "
                         "against TMDb..."
                     )
                     media_targets = [parse_directory_metadata(resolved_path)]
 
     if not media_targets:
-        LOG.warning(f"No media targets found in {resolved_path}")
+        LOG.warning(f"No media targets found in {escape(str(resolved_path))}")
         return {"status": "empty", "total_files": 0}
 
     LOG.info(f"Processing {len(media_targets)} media items against TMDb...")
@@ -877,6 +884,7 @@ def tmdb(
                 for media_meta in media_targets:
                     wait_if_paused()
                     display_label = media_meta.file_path.name
+                    display_escaped = escape(display_label)
                     match_candidate = (
                         tmdb_svc.search_tv(media_meta.title, media_meta.year)
                         if media_meta.is_episode
@@ -884,7 +892,7 @@ def tmdb(
                     )
                     if not match_candidate:
                         table.add_row(
-                            display_label,
+                            display_escaped,
                             "[red]No match found[/red]",
                             "-",
                             "-",
@@ -898,7 +906,7 @@ def tmdb(
                     raw_id = match_candidate.get("id")
                     if raw_id is None:
                         table.add_row(
-                            display_label,
+                            display_escaped,
                             "[red]No match found[/red]",
                             "-",
                             "-",
@@ -955,8 +963,8 @@ def tmdb(
 
                     status_msg = " | ".join(actions) if actions else "Matched"
                     table.add_row(
-                        display_label,
-                        str(matched_title),
+                        display_escaped,
+                        escape(str(matched_title)),
                         year_str,
                         str(tmdb_id),
                         str(imdb_id),

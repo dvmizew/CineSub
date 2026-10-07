@@ -4,6 +4,7 @@ import contextlib
 import select
 import sys
 import threading
+import time
 from collections.abc import Callable, Generator
 
 from rich.console import Console
@@ -18,6 +19,19 @@ from rich.progress import (
 )
 from rich.theme import Theme
 
+if sys.platform == "win32":
+    with contextlib.suppress(Exception):
+        import ctypes
+
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+        ctypes.windll.kernel32.SetConsoleCP(65001)
+    if hasattr(sys.stdout, "reconfigure"):
+        with contextlib.suppress(Exception):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        with contextlib.suppress(Exception):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 _THEME = Theme(
     {
         "info": "cyan",
@@ -27,7 +41,7 @@ _THEME = Theme(
     }
 )
 
-CONSOLE = Console(theme=_THEME, force_terminal=True)
+CONSOLE = Console(theme=_THEME)
 
 
 class CineSubLogger:
@@ -130,7 +144,52 @@ def interactive_pause_listener(
             progress.update(task_id, description=desc)
             progress.refresh()
 
+    def _toggle_pause() -> None:
+        if _PAUSE_EVENT.is_set():
+            _PAUSE_EVENT.clear()
+            if on_pause:
+                try:
+                    on_pause()
+                except (RuntimeError, OSError, ValueError) as err:
+                    LOG.debug(f"Pause callback error: {err}")
+            else:
+                _default_pause()
+            LOG.warning(
+                "⏸️  [bold yellow]PAUSED[/] - In-flight operations "
+                "finishing cleanly. Press [bold cyan][Space][/] or "
+                "[bold cyan]'p'[/] to resume..."
+            )
+        else:
+            _PAUSE_EVENT.set()
+            if on_resume:
+                try:
+                    on_resume()
+                except (RuntimeError, OSError, ValueError) as err:
+                    LOG.debug(f"Resume callback error: {err}")
+            else:
+                _default_resume()
+            LOG.info("▶️  [bold green]RESUMED[/] - Continuing execution...")
+
     def _listener_loop() -> None:
+        if sys.platform == "win32":
+            try:
+                import msvcrt
+            except ImportError:
+                return
+
+            try:
+                while not stop_event.is_set():
+                    if msvcrt.kbhit():
+                        char = msvcrt.getwch()
+                        if char in (" ", "p", "P"):
+                            _toggle_pause()
+                            while msvcrt.kbhit():
+                                msvcrt.getwch()
+                    time.sleep(0.1)
+            except (OSError, ValueError):
+                return
+            return
+
         orig_term = None
         try:
             import termios
@@ -149,31 +208,7 @@ def interactive_pause_listener(
                     if not char:
                         break
                     if char in (" ", "p", "P"):
-                        if _PAUSE_EVENT.is_set():
-                            _PAUSE_EVENT.clear()
-                            if on_pause:
-                                try:
-                                    on_pause()
-                                except (RuntimeError, OSError, ValueError) as err:
-                                    LOG.debug(f"Pause callback error: {err}")
-                            else:
-                                _default_pause()
-                            LOG.warning(
-                                "⏸️  [bold yellow]PAUSED[/] - In-flight operations "
-                                "finishing cleanly. Press [bold cyan][Space][/] or "
-                                "[bold cyan]'p'[/] to resume..."
-                            )
-                        else:
-                            _PAUSE_EVENT.set()
-                            if on_resume:
-                                try:
-                                    on_resume()
-                                except (RuntimeError, OSError, ValueError) as err:
-                                    LOG.debug(f"Resume callback error: {err}")
-                            else:
-                                _default_resume()
-                            LOG.info("▶️  [bold green]RESUMED[/] - Continuing execution...")
-
+                        _toggle_pause()
                         while True:
                             drain_list, _, _ = select.select([sys.stdin], [], [], 0.05)
                             if drain_list:

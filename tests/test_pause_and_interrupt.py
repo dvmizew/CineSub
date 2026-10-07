@@ -138,3 +138,32 @@ def test_extract_embedded_subtitles_batch_interruption_graceful(tmp_path: Path) 
         report = extract_embedded_subtitles_batch(path=tmp_path)
         assert report["interrupted"] is True
         assert len(report["results"]) == 1
+
+
+def test_interactive_pause_listener_windows_msvcrt() -> None:
+    mock_msvcrt = MagicMock()
+    mock_msvcrt.kbhit.side_effect = [True, False, False, False]
+    mock_msvcrt.getwch.return_value = " "
+
+    with (
+        patch("sys.platform", "win32"),
+        patch.dict("sys.modules", {"msvcrt": mock_msvcrt}),
+        patch("sys.stdin.isatty", return_value=True),
+    ):
+        with interactive_pause_listener():
+            time.sleep(0.05)
+            assert is_paused()
+            _PAUSE_EVENT.set()
+
+
+def test_atomic_write_file_cleanup_on_error(tmp_path: Path) -> None:
+    from cinesub.core.utils import atomic_write_file
+
+    dest = tmp_path / "test.srt"
+    with patch("os.replace", side_effect=OSError("Target locked")):
+        try:
+            atomic_write_file(dest, b"sample srt content")
+        except OSError:
+            pass
+    temp_files = list(tmp_path.glob(".*.tmp"))
+    assert len(temp_files) == 0

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import datetime
 import gzip
 import io
@@ -256,9 +257,14 @@ def atomic_write_file(destination: Path, content: bytes) -> Path:
     """Atomically write content bytes to destination path using a temporary hidden file."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp_file = destination.parent / f".{destination.name}.tmp"
-    temp_file.write_bytes(content)
-    os.replace(temp_file, destination)
-    return destination
+    try:
+        temp_file.write_bytes(content)
+        os.replace(temp_file, destination)
+        return destination
+    finally:
+        if temp_file.exists():
+            with contextlib.suppress(OSError):
+                temp_file.unlink()
 
 
 def save_subtitle_to_disk(

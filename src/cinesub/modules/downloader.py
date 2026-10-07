@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import orjson
+from rich.markup import escape
 
 from cinesub.core.constants import DEFAULT_LANGUAGE, UPGRADE_HYSTERESIS_DELTA
 from cinesub.core.logger import LOG, create_progress, interactive_pause_listener, wait_if_paused
@@ -123,7 +124,7 @@ def save_report_output(report: dict[str, Any], json_path: Path | str) -> Path:
             temp_p.unlink(missing_ok=True)
         raise
 
-    LOG.success(f"Report saved to: [white]{out_p}[/white]")
+    LOG.success(f"Report saved to: [white]{escape(str(out_p))}[/white]")
     return out_p
 
 
@@ -136,7 +137,8 @@ def _search_provider_worker(
     """Worker task querying an individual subtitle provider in parallel."""
     if hasattr(service_instance, "is_available") and not service_instance.is_available:
         return service_name, []
-    LOG.info(f"Querying {service_name.upper()} API for [{target_lang.upper()}] subtitles...")
+    lang_tag = escape(target_lang.upper())
+    LOG.info(f"Querying {service_name.upper()} API for [{lang_tag}] subtitles...")
     try:
         matches = service_instance.search(video_meta, language=target_lang)
         return service_name, matches
@@ -163,8 +165,9 @@ def download_subtitle(
     existing_sub = has_existing_subtitle(path, target_lang)
 
     if existing_sub and not force:
+        sub_name = escape(existing_sub.name)
         LOG.info(
-            f"Skipping {path.name} (subtitle already exists: [white]{existing_sub.name}[/white])"
+            f"Skipping {escape(path.name)} (subtitle already exists: [white]{sub_name}[/white])"
         )
         video_meta = parse_video_metadata(path, compute_hash=False)
         return video_meta, None, existing_sub
@@ -174,7 +177,7 @@ def download_subtitle(
     else:
         target_srt = path.parent / f"{path.stem}.srt"
 
-    LOG.info(f"Analyzing media file: [white]{path.name}[/white]")
+    LOG.info(f"Analyzing media file: [white]{escape(path.name)}[/white]")
     video_meta = parse_video_metadata(path, compute_hash=True, extract_duration=True)
 
     tmdb_svc = TmdbService()
@@ -241,17 +244,15 @@ def download_subtitle(
     if best_match.matched_by_hash:
         LOG.success(f"Matched by exact Video Hash via {best_match.provider.upper()}")
     else:
-        LOG.info(
-            f"Selected best candidate via {best_match.provider.upper()}: {best_match.release_name}"
-        )
+        cand_name = escape(best_match.release_name)
+        LOG.info(f"Selected best candidate via {best_match.provider.upper()}: {cand_name}")
 
     wait_if_paused()
     if dry_run:
-        LOG.info(
-            f"[yellow][DRY-RUN][/yellow] Would download into: [white]{target_srt.name}[/white]"
-        )
+        srt_name = escape(target_srt.name)
+        LOG.info(f"[yellow][DRY-RUN][/yellow] Would download into: [white]{srt_name}[/white]")
     else:
-        LOG.info(f"Downloading into: [white]{target_srt.name}[/white]")
+        LOG.info(f"Downloading into: [white]{escape(target_srt.name)}[/white]")
         service_inst = services[best_match.provider]
         service_inst.download(best_match, destination=target_srt)
 
@@ -340,7 +341,7 @@ def _batch_download_worker(
             status=item_status,
         )
     except Exception as exc:
-        LOG.error(f"Failed processing {video_file_path.name}: {exc}")
+        LOG.error(f"Failed processing {escape(video_file_path.name)}: {exc}")
         return {
             "video_file": video_file_path.name,
             "video_path": str(video_file_path),
@@ -556,11 +557,11 @@ def download_bulk(
         if dry_run:
             LOG.info(
                 f"[yellow][DRY-RUN][/yellow] Would download [{idx}/{len(selected)}]: "
-                f"[white]{filename}[/white]"
+                f"[white]{escape(filename)}[/white]"
             )
             downloaded.append((match, dest_path))
         else:
-            LOG.info(f"Downloading [{idx}/{len(selected)}]: [white]{filename}[/white]")
+            LOG.info(f"Downloading [{idx}/{len(selected)}]: [white]{escape(filename)}[/white]")
             svc = services.get(match.provider)
             if svc:
                 svc.download(match, destination=dest_path)
@@ -613,7 +614,7 @@ def _batch_bulk_worker(
         item_status = "dry_run" if dry_run else "success"
         return _format_bulk_item_report(video_meta, downloaded_subtitles, status=item_status)
     except Exception as exc:
-        LOG.error(f"Failed bulk retrieval for {video_file_path.name}: {exc}")
+        LOG.error(f"Failed bulk retrieval for {escape(video_file_path.name)}: {exc}")
         return {
             "video_file": video_file_path.name,
             "video_path": str(video_file_path),
