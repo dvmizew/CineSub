@@ -1,5 +1,8 @@
 # CineSub
 
+[![Latest Release](https://img.shields.io/github/v/release/dvmizew/CineSub?color=brightgreen&label=Latest%20Release&logo=github)](https://github.com/dvmizew/CineSub/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Automated multi-provider subtitle downloader and media library management CLI for movies and TV series.
 
 CineSub searches across top subtitle providers (**OpenSubtitles.com**, **SubDL**, **SubSource**, **Subs.ro**, **BetaSeries**, **Gestdown**, **BSPlayer**, **AnimeTosho**, and **Assrt.net**), matches files using exact 64-bit video hashes (`OSHash`) or release metadata enriched via **TMDb**, validates subtitle timing invariants against video duration, and downloads clean, UTF-8 normalized `.srt` companion subtitles.
@@ -42,25 +45,34 @@ Video File ──► [ 1. Compute 64-bit OSHash ] ──► Exact hash match acr
 
 ## Installation
 
-### 1. System Dependency
+### 1. Download Standalone Release Binary
 
-`ffmpeg` and `ffprobe` are required for container subtitle extraction (`cinesub extract`) and video duration inspection.
+Download the pre-compiled, self-contained executable for your platform directly from GitHub Releases (no Python environment or manual dependency setup required):
+
+👉 **[Download Latest CineSub Release](https://github.com/dvmizew/CineSub/releases/latest)**
+
+#### Linux / macOS
+```bash
+# Download binary directly from releases
+curl -L -o cinesub https://github.com/dvmizew/CineSub/releases/latest/download/cinesub
+chmod +x cinesub
+sudo mv cinesub /usr/local/bin/
+```
+
+#### Windows
+Download `cinesub.exe` from **[GitHub Releases](https://github.com/dvmizew/CineSub/releases/latest)** and place it in your `PATH` or directly inside your media folder.
+
+---
+
+### 2. System Dependency (Optional)
+
+`ffmpeg` and `ffprobe` are optional, recommended for embedded container subtitle extraction (`cinesub extract`) and video duration inspection:
 
 - **Ubuntu / Debian**: `sudo apt install ffmpeg`
 - **Arch Linux**: `sudo pacman -S ffmpeg`
 - **Fedora**: `sudo dnf install ffmpeg`
 - **macOS**: `brew install ffmpeg`
 - **Windows**: `winget install Gyan.FFmpeg` or `choco install ffmpeg`
-
-### 2. Python Package
-
-```bash
-git clone https://github.com/dvmizew/CineSub.git
-cd CineSub
-pip install -e .
-```
-
-*Requires Python 3.10+.*
 
 ---
 
