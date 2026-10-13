@@ -1,281 +1,277 @@
 # CineSub
 
 [![Latest Release](https://img.shields.io/github/v/release/dvmizew/CineSub?color=brightgreen&label=Latest%20Release&logo=github)](https://github.com/dvmizew/CineSub/releases/latest)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Automated multi-provider subtitle downloader and media library management CLI for movies and TV series.
+Automated subtitle downloader and media library management CLI for movies and TV series.
 
-CineSub searches across top subtitle providers (**OpenSubtitles.com**, **SubDL**, **SubSource**, **Subs.ro**, **BetaSeries**, **Gestdown**, **BSPlayer**, **AnimeTosho**, and **Assrt.net**), matches files using exact 64-bit video hashes (`OSHash`) or release metadata enriched via **TMDb**, validates subtitle timing invariants against video duration, and downloads clean, UTF-8 normalized `.srt` companion subtitles.
+CineSub searches across 9 subtitle providers, matches releases using 64-bit video hashes (`OSHash`) or TMDb-enriched metadata, validates timing against video duration, and downloads clean, UTF-8 normalized `.srt` companion subtitles for Plex, Emby, and Jellyfin.
 
-Supports single video files or batch processing of entire media folders with multithreading and automatic token-bucket rate limiting.
+- **Zero False Positives**: Prioritizes exact 64-bit video checksums over filenames.
+- **9 Providers**: OpenSubtitles, SubDL, SubSource, Subs.ro, BetaSeries, Gestdown, BSPlayer, AnimeTosho, and Assrt.
+- **Plex / Emby Ready**: Language tags (`movie.ro.srt`), atomic POSIX file writes, and NAS directory pruning.
+- **Embedded Stream Extraction**: Extracts embedded tracks from `.mkv` and `.mp4` without re-encoding.
+- **Source Video Immutability**: CineSub **never** alters, moves, or touches original video files.
+
+---
+
+## Quickstart
+
+### 1. Download Binary
+
+Download the self-contained executable for your platform from **[GitHub Releases](https://github.com/dvmizew/CineSub/releases/latest)**:
+
+**Linux (x86_64)** — [Direct Download](https://github.com/dvmizew/CineSub/releases/latest/download/cinesub-linux-x86_64):
+```bash
+curl -L -o cinesub https://github.com/dvmizew/CineSub/releases/latest/download/cinesub-linux-x86_64
+chmod +x cinesub
+sudo mv cinesub /usr/local/bin/
+```
+
+**Windows (x86_64)** — [Direct Download](https://github.com/dvmizew/CineSub/releases/latest/download/cinesub-windows-x86_64.exe):
+```powershell
+Invoke-WebRequest -Uri "https://github.com/dvmizew/CineSub/releases/latest/download/cinesub-windows-x86_64.exe" -OutFile "cinesub.exe"
+```
+*(Place `cinesub.exe` in your `PATH` or media folder)*
+
+> *Optional:* `ffmpeg` and `ffprobe` are only required for `cinesub extract` and video duration inspection.
+
+### 2. Run Immediately
+
+Providers like **BSPlayer**, **Gestdown**, and **AnimeTosho** work **out of the box with zero API keys**:
+
+```bash
+# Download best subtitle for a movie
+cinesub download "Dune.Part.Two.2024.1080p.WEBRip.mp4" -l ro
+
+# Process an entire TV season in parallel with Plex language suffix (e.g. episode.ro.srt)
+cinesub download "/media/TV/House.of.the.Dragon.S02" -l ro -S -t 8
+```
+
+---
+
+## Configuration & `.env.example`
+
+To unlock commercial and archive providers (**OpenSubtitles**, **SubDL**, **SubSource**, **Subs.ro**, **BetaSeries**, **Assrt**, and **TMDb**), create a `.env` file from `.env.example`:
+
+```bash
+# Copy the template to .env in your current working directory or home directory
+cp .env.example .env
+```
+
+Open `.env` in any text editor and fill in your free API credentials:
+
+```ini
+# OpenSubtitles.com REST API (Register at https://www.opensubtitles.com/consumers)
+OPENSUBTITLES_API_KEY=your_key_here
+OPENSUBTITLES_USER_AGENT=CineSub v0.2.0
+
+# SubDL API (Register at https://subdl.com)
+SUBDL_API_KEY=your_key_here
+
+# SubSource API (Register at https://subsource.net)
+SUBSOURCE_API_KEY=your_key_here
+
+# Subs.ro API (Register at https://subs.ro)
+SUBSRO_API_KEY=your_key_here
+
+# BetaSeries API (Register at https://www.betaseries.com/api)
+BETASERIES_API_KEY=your_key_here
+
+# Assrt.net / Shooter.cn API (Register at https://assrt.net)
+ASSRT_API_TOKEN=your_token_here
+
+# TMDb API (Generate token at https://www.themoviedb.org/settings/api)
+TMDB_READ_ACCESS_TOKEN=your_token_here
+TMDB_ACCOUNT_ID=your_account_id_here
+
+# General Settings
+CINESUB_DEFAULT_LANGUAGE=en
+CINESUB_TIMEOUT=15
+```
+
+### Environment Variables Reference
+
+| Variable | Description & Registration | Required? |
+| :--- | :--- | :---: |
+| `OPENSUBTITLES_API_KEY` | [OpenSubtitles.com](https://www.opensubtitles.com/consumers) API key | Optional |
+| `OPENSUBTITLES_USERNAME` | OpenSubtitles username (increases daily download quotas) | Optional |
+| `OPENSUBTITLES_PASSWORD` | OpenSubtitles password | Optional |
+| `SUBDL_API_KEY` | [SubDL](https://subdl.com) API key for multi-language release search | Optional |
+| `SUBSOURCE_API_KEY` | [SubSource](https://subsource.net) API key | Optional |
+| `SUBSRO_API_KEY` | [Subs.ro](https://subs.ro) API key (Romanian retail subtitle archive) | Optional |
+| `BETASERIES_API_KEY` | [BetaSeries](https://www.betaseries.com/api) API key (TV series & movies) | Optional |
+| `ASSRT_API_TOKEN` | [Assrt.net](https://assrt.net) API token (Shooter.cn subtitle archive) | Optional |
+| `TMDB_READ_ACCESS_TOKEN` | [TMDb](https://www.themoviedb.org/settings/api) Read Access Token (metadata enrichment & watchlist) | Optional |
+| `TMDB_ACCOUNT_ID` | TMDb Account ID (required for Watchlist / Favorites sync) | Optional |
+| `CINESUB_DEFAULT_LANGUAGE` | Default ISO 639-1 language code (e.g. `en`, `ro`, `es`, `fr`, `de`). Default: `en` | Optional |
+| `CINESUB_TIMEOUT` | HTTP network request timeout in seconds. Default: `15` | Optional |
+
+> **Note:** CineSub searches for `.env` in the current working directory first, then in your user home directory (`~/.env`). Verify your setup at any time with `cinesub config`.
 
 ---
 
 ## How It Works
 
 ```
-Video File ──► [ 1. Compute 64-bit OSHash ] ──► Exact hash match across providers?
-                     │                                   │
-                    No                                  Yes
-                     ▼                                   ▼
-             [ 2. Parse Metadata & TMDb ]       Download Highest-Scoring Subtitle
-             (Title, Year, Season/Episode,               │
-              Resolution, Release Group, IMDb ID)        ▼
-                     │                          [ 4. Validate & Normalize ]
-                     ▼                          • Timing invariant check vs duration
-          Query Multi-Provider APIs             • UTF-8 encoding normalization
-          (OS, SubDL, SubSource, Subs.ro,       • Downgrade protection check
-           BetaSeries, Gestdown, BSPlayer,               │
-           AnimeTosho, Assrt.net)                        ▼
-                     │                          Atomic POSIX file replace (.srt)
-                     ▼                                   │
-          Score candidates with RapidFuzz                ▼
-          & Ecosystem Group Clusters            Final Verified Subtitle
-                     │
-                     └─────────────────────────►
+Video File ──► [ 1. 64-bit OSHash ] ──► Exact Hash Match? ────► [ Download Best Subtitle ]
+                     │                                                   │
+                    No                                                   ▼
+                     ▼                                        [ 3. Validate & Save ]
+              [ 2. Metadata & TMDb ]                          • Timing check vs duration
+              (Title, Year, Episode,                          • UTF-8 normalization
+               Release Group, IMDb ID)                        • Downgrade protection
+                     │                                        • Atomic write (.srt)
+                     ▼                                                   │
+         Query 9 Providers in Parallel ──────────────────────────────────┘
 ```
 
-1. **Exact Hash Match**: Computes the 64-bit checksum over the video header and footer. If found on OpenSubtitles, BSPlayer, or supported APIs, timing is typically already tailored for that specific encode.
-2. **Metadata Fallback & TMDb Enrichment**: If hash matching yields no results, `guessit` extracts media metadata (title, season/episode, release group, source) and enriches it via TMDb to resolve IMDb IDs.
-3. **Multi-Provider Search & Heuristic Scoring**: Subtitle candidates from all active providers are ranked by release group clusters, exact token boundaries, and short-title penalties using `rapidfuzz`.
-4. **Timing Validation & Atomic Writes**: Validates maximum subtitle timestamps against video duration to eliminate cross-movie collisions, and saves `.srt` files using atomic POSIX replacement (`os.replace`).
-5. **Thread-Safe Rate Limiting**: Ensures concurrent batch jobs strictly respect provider thresholds (4.0 req/s OpenSubtitles, 8.0 req/s SubDL, 1.0 req/s SubSource, 2.0 req/s Subs.ro, 2.0 req/s BetaSeries, 2.0 req/s Gestdown, 2.0 req/s BSPlayer, 2.0 req/s AnimeTosho, 0.33 req/s Assrt, 4.0 req/s TMDb) with synchronized backoff on HTTP 429.
+1. **Exact 64-Bit Hash Matching**: Reads the first and last 64 KB of the video file (`OSHash`). If a provider has a matching hash, subtitle synchronization is guaranteed without relying on messy filenames.
+2. **Metadata Fallback & TMDb Enrichment**: If no hash matches, CineSub extracts media details (`guessit`), enriches IMDb/TMDb IDs, and scores candidate releases using release group clusters and token boundaries (`rapidfuzz`).
+3. **Timing Invariants & Atomic Writes**: Validates the subtitle's maximum timestamp against video duration to eliminate cross-movie collisions. Subtitles are written atomically (`.<name>.tmp` $\to$ `os.replace`) to prevent media server scan glitches.
+4. **Token-Bucket Rate Limiting**: Synchronized per-provider rate limiters prevent HTTP 429 bans during large multi-threaded batch jobs.
 
 ---
 
-## Installation
+## Commands & Examples
 
-### 1. Download Standalone Release Binary
+### 1. `cinesub download` (alias: `sync`)
 
-Download the pre-compiled, self-contained executable for your platform directly from GitHub Releases (no Python environment or manual dependency setup required):
-
-👉 **[Download Latest CineSub Release](https://github.com/dvmizew/CineSub/releases/latest)**
-
-#### Linux (x86_64)
-```bash
-# Download latest standalone binary
-curl -L -o cinesub https://github.com/dvmizew/CineSub/releases/latest/download/cinesub-linux-x86_64
-chmod +x cinesub
-sudo mv cinesub /usr/local/bin/
-```
-
-#### Windows (x86_64)
-Download `cinesub-windows-x86_64.exe` from **[GitHub Releases](https://github.com/dvmizew/CineSub/releases/latest)** and place it in your `PATH` or directly inside your media folder.
-
----
-
-### 2. System Dependency (Optional)
-
-`ffmpeg` and `ffprobe` are optional, recommended for embedded container subtitle extraction (`cinesub extract`) and video duration inspection:
-
-- **Ubuntu / Debian**: `sudo apt install ffmpeg`
-- **Arch Linux**: `sudo pacman -S ffmpeg`
-- **Fedora**: `sudo dnf install ffmpeg`
-- **macOS**: `brew install ffmpeg`
-- **Windows**: `winget install Gyan.FFmpeg` or `choco install ffmpeg`
-
----
-
-## Configuration & API Credentials
-
-| Provider | API Endpoint | Documentation & API Key Registration | Rate Limit |
-| :--- | :--- | :--- | :--- |
-| **OpenSubtitles.com** | `https://api.opensubtitles.com/api/v1` | [OpenSubtitles API Portal](https://www.opensubtitles.com/consumers) | 4.0 req/s (Client Cap) / 5 req/s max |
-| **SubDL** | `https://api.subdl.com/api/v1` | [SubDL API Portal](https://subdl.com/api) | 8.0 req/s (600 req/min Cap) |
-| **SubSource** | `https://api.subsource.net/api/v1` | [SubSource Account Portal](https://subsource.net) | 1.0 req/s (60 req/min Cap) |
-| **Subs.ro** | `https://api.subs.ro/v1.0` | [Subs.ro API Documentation](https://api.subs.ro) | 2.0 req/s (Safe Client Cap) |
-| **BetaSeries** | `https://api.betaseries.com` | [BetaSeries API Portal](https://www.betaseries.com/api) | 2.0 req/s (Safe Client Cap) |
-| **Gestdown** | `https://api.gestdown.info` | [Gestdown / Addic7ed Proxy](https://api.gestdown.info) | 2.0 req/s (Public, No Key Required) |
-| **BSPlayer** | `http://s1.api.bsplayer-subtitles.com/v1.php` | BSPlayer Community 64-bit SOAP API | 2.0 req/s (Public, No Key Required) |
-| **AnimeTosho** | `https://feed.animetosho.org/json` | [AnimeTosho Feed & Attachments](https://animetosho.org) | 2.0 req/s (Public, No Key Required) |
-| **Assrt.net** | `https://api.assrt.net/v1` | [Assrt.net (Shooter.cn) API](https://assrt.net) | 0.33 req/s (20 req/min Cap) |
-| **TMDb** | `https://api.themoviedb.org/3` | [TMDb Developer Settings](https://developer.themoviedb.org) | 4.0 req/s (Client Cap) |
-
-Create a `.env` file in your working directory or home directory:
+Finds and saves the single highest-scoring subtitle matching your video (`movie.mp4` $\to$ `movie.srt`).
 
 ```bash
-cp .env.example .env
+# Download using default language (en, or CINESUB_DEFAULT_LANGUAGE from .env)
+cinesub download "Movie.2024.1080p.mp4"
+
+# Download in a specific language (e.g. Romanian)
+cinesub download "Movie.2024.1080p.mp4" -l ro
+
+# Save with Plex/Emby language suffix (Movie.2024.1080p.ro.srt)
+cinesub download "Movie.2024.1080p.mp4" -l ro -S
+
+# Batch process a TV show folder with 8 parallel worker threads
+cinesub download "/media/TV/Show.S01" -l ro -S -t 8
+
+# Query only a specific provider (e.g. bsplayer, opensubtitles, subdl, subsro)
+cinesub download "Movie.2024.mp4" -p bsplayer
+
+# Dry-run: simulate matching without downloading files or touching disk
+cinesub download "/media/Movies" -l ro --dry-run
+
+# Force overwrite existing subtitles (default skips media with existing .srt)
+cinesub download "/media/Movies" -l ro -f
+
+# Export execution summary to JSON or streaming JSONL
+cinesub download "/media/Movies" -l ro -j report.jsonl
 ```
 
-```ini
-# OpenSubtitles.com API Key (https://www.opensubtitles.com/consumers)
-OPENSUBTITLES_API_KEY=your_opensubtitles_api_key
-
-# SubDL API Key (https://subdl.com)
-SUBDL_API_KEY=your_subdl_api_key
-
-# SubSource API Key (https://subsource.net)
-SUBSOURCE_API_KEY=your_subsource_api_key
-
-# Subs.ro API Key (https://subs.ro)
-SUBSRO_API_KEY=your_subsro_api_key
-
-# BetaSeries API Key (https://www.betaseries.com/api)
-BETASERIES_API_KEY=your_betaseries_api_key
-
-# TMDb Read Access Token or API Key (https://www.themoviedb.org/settings/api)
-TMDB_READ_ACCESS_TOKEN=your_tmdb_read_access_token
-TMDB_ACCOUNT_ID=your_tmdb_account_id
-
-# Default language (ISO 639-1 code, e.g. en, ro, es, fr, de)
-CINESUB_DEFAULT_LANGUAGE=en
-
-# Request timeout in seconds
-CINESUB_TIMEOUT=15
-```
-
-Verify your environment configuration:
-```bash
-cinesub config
-```
+**Key Flags:**
+- `PATH`: Path to a video file or directory.
+- `-l, --language`: ISO 639-1 language code (e.g. `ro`, `en`, `es`, `fr`). Default: `en`.
+- `-S, --lang-suffix`: Saves subtitle with Plex/Emby language tag (`<stem>.<lang>.srt`).
+- `-p, --provider`: Provider filter (`all`, `opensubtitles`, `subdl`, `subsource`, `subsro`, `betaseries`, `gestdown`, `bsplayer`, `animetosho`, `assrt`). Default: `all`.
+- `-t, --threads`: Worker threads for concurrent batch processing. Default: `4`.
+- `-d, --dry-run`: Simulate search and matching without downloading.
+- `-f, --force`: Overwrite existing subtitle files on disk.
+- `-j, --json`: Save structured execution report to a `.json` or `.jsonl` file.
+- `--verbose`: Enable debug logging.
 
 ---
 
-## Usage Guide
+### 2. `cinesub bulk`
 
-### 1. `cinesub download` (or `cinesub sync`) — Search & Download Best Subtitle
-
-Downloads the single best subtitle candidate across configured providers and saves it matching the video filename (`movie.mp4` $\to$ `movie.srt`).
-
-Supports single video files or entire directories for batch processing with multithreading.
+Downloads 3–10 subtitle alternatives into the video folder for manual inspection and comparison. Alternatives are saved sequentially as `<stem>_<rank>_<provider>.srt`.
 
 ```bash
-# Download the best Romanian subtitle for a movie
-cinesub download "Dune.Part.Two.2024.1080p.WEBRip.x264-FGT.mp4" -l ro
+# Download top 5 subtitle alternatives for a movie or episode
+cinesub bulk "Episode.S01E01.mkv" -l ro -n 5
 
-# Download for a full TV series season with 8 parallel worker threads
-cinesub download "/path/to/House.of.the.Dragon.S02" -l ro -t 8
+# Download top 3 alternatives for an entire TV season with 4 threads
+cinesub bulk "/media/TV/Season1" -l en -n 3 -t 4
 
-# Save with Plex/Emby language suffix (e.g., movie.ro.srt)
-cinesub download "The.Last.of.Us.S01E01.720p.HDTV.mkv" -l ro -S
+# Query a single provider for alternatives
+cinesub bulk "Movie.2024.mp4" -l en -p subdl -n 5
 
-# Full simulation without downloading or modifying files (Dry Run)
-cinesub download "/path/to/movies" -l ro --dry-run
+# Dry-run: preview alternative candidates without writing files
+cinesub bulk "/media/TV/Season1" -l ro -n 3 --dry-run
 
-# Save batch report as formatted indented JSON or streaming JSONL
-cinesub download "/path/to/movies" -l ro -j report.jsonl
+# Export bulk search report to JSONL
+cinesub bulk "/media/TV/Season1" -l ro -n 3 -j bulk_results.jsonl
 ```
 
-**Flags & Options:**
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `PATH` | *required* | Path to a video file or a directory containing video files |
-| `-l, --language` | `en` | Subtitle language (ISO 639-1 code, e.g. `ro`, `en`, `es`) |
-| `-p, --provider` | `all` | Search provider: `all`, `opensubtitles`, `subdl`, `subsource`, `subsro`, `betaseries`, `gestdown`, `bsplayer`, `animetosho`, or `assrt` |
-| `-S, --lang-suffix` | `False` | Save subtitle with language tag for Plex/Emby (e.g. `movie.ro.srt`) |
-| `-d, --dry-run` | `False` | Simulate search and matching without downloading or modifying files |
-| `-t, --threads` | `4` | Number of concurrent worker threads for batch processing |
-| `-j, --json` | `None` | Save structured report to a JSON or JSONL file |
-| `-f, --force` | `False` | Overwrite existing subtitle files (default: skips existing subtitles) |
-| `--verbose` | `False` | Enable debug logging |
+**Key Flags:**
+- `-n, --limit`: Number of subtitle alternatives to download (1–20). Default: `5`.
+- `-l, --language`: Target subtitle language code. Default: `en`.
+- `-p, --provider`: Provider filter. Default: `all`.
+- `-t, --threads`: Worker threads for directory batching. Default: `4`.
+- `-d, --dry-run`: Simulate search without downloading files.
+- `-f, --force`: Overwrite existing alternative `.srt` files.
+- `-j, --json`: Save structured report to JSON or JSONL.
 
 ---
 
-### 2. `cinesub bulk` — Batch Download for Manual Testing
+### 3. `cinesub extract`
 
-Downloads 5–10 subtitle alternatives across providers into the video directory for manual comparison.
+Inspects video containers (`.mkv`, `.mp4`, `.m2ts`) using `ffprobe` and extracts embedded text subtitle streams (`subrip`, `srt`, `ass`, `mov_text`, `webvtt`) into companion `.srt` files.
 
-```bash
-# Download 5 subtitle alternatives for a single episode
-cinesub bulk "House.of.the.Dragon.S02E01.1080p.mkv" -l ro -n 5
-
-# Simulate bulk download without writing to disk
-cinesub bulk "/path/to/season1" -l en -n 3 --dry-run
-
-# Download alternatives for an entire directory and export to JSON/JSONL
-cinesub bulk "/path/to/season1" -l en -n 3 -t 4 --json bulk_report.jsonl
-```
-
-Files are named systematically in the video's folder:
-```text
-House.of.the.Dragon.S02E01.1080p_1_opensubtitles.srt
-House.of.the.Dragon.S02E01.1080p_2_subdl.srt
-House.of.the.Dragon.S02E01.1080p_3_opensubtitles.srt
-```
-
-**Flags & Options:**
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `PATH` | *required* | Path to video file or directory |
-| `-l, --language` | `en` | Subtitle language code |
-| `-n, --limit` | `5` | Number of subtitle variations to download (1–20) |
-| `-p, --provider` | `all` | Provider filter: `all`, `opensubtitles`, `subdl`, `subsource`, `subsro`, `betaseries`, `gestdown`, `bsplayer`, `animetosho`, or `assrt` |
-| `-d, --dry-run` | `False` | Simulate search without downloading files |
-| `-t, --threads` | `4` | Number of concurrent worker threads |
-| `-j, --json` | `None` | Save structured report to a JSON or JSONL file |
-| `-f, --force` | `False` | Overwrite existing files |
-| `--verbose` | `False` | Enable debug logging |
-
----
-
-### 3. `cinesub tmdb` — The Movie Database Sync & Bookmarks / Watchlist
-
-Search TMDb for video files or directory names in a folder and optionally synchronize them directly to your TMDb Watchlist (Bookmarks) or Favorites:
-
-```bash
-# Query TMDb for media in a folder
-cinesub tmdb "/path/to/Movies"
-
-# Bookmark (add to Watchlist) all matched movies in TMDb
-cinesub tmdb "/path/to/Movies" -b
-
-# Scan directory / folder names directly (for libraries organized as movie folders)
-cinesub tmdb "/path/to/Movies" --by-folder -b
-
-# Add all matched movies to both TMDb Favorites and Watchlist
-cinesub tmdb "/path/to/Movies" --favorite --bookmark
-
-# Simulate without altering your TMDb account lists (Dry Run)
-cinesub tmdb "/path/to/Movies" -b --dry-run
-```
-
-**Flags & Options:**
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `PATH` | *required* | Path to video file or directory |
-| `-b, --bookmark` | `False` | Add matched media to your TMDb Watchlist / Bookmarks (alias for `-w`) |
-| `-w, --watchlist` | `False` | Add matched media to your TMDb Watchlist |
-| `-f, --favorite` | `False` | Add matched media to your TMDb Favorites list |
-| `-F, --by-folder` | `False` | Search TMDb using folder / directory names instead of video filenames |
-| `-d, --dry-run` | `False` | Simulate search without submitting modifications to TMDb |
-| `--verbose` | `False` | Enable debug logging |
-
----
-
-### 4. `cinesub extract` — Embedded Subtitle Extraction
-
-Inspects video containers (`.mkv`, `.mp4`, `.m2ts`, etc.) using `ffprobe` and extracts embedded text-based subtitle tracks (`subrip`, `srt`, `ass`, `ssa`, `mov_text`, `webvtt`) directly into UTF-8 normalized companion `.srt` files matching Plex / Emby conventions (`<video_stem>.<lang>.srt`).
-
-**Video File Immutability Guarantee**: CineSub never modifies, re-encodes, or touches original video containers on disk. Subtitle streams are read-only mapped and written into external companion files.
+> **Video Immutability:** CineSub reads stream tracks without altering, re-encoding, or touching original video files.
 
 ```bash
 # Extract all embedded subtitle streams from a movie
-cinesub extract "Oppenheimer.2023.2160p.UHD.Remux.mkv"
+cinesub extract "Movie.2024.mkv"
 
 # Extract only Romanian embedded subtitle tracks
-cinesub extract "/path/to/movies" -l ro
+cinesub extract "Movie.2024.mkv" -l ro
 
-# Simulate extraction without writing files to disk (Dry Run)
-cinesub extract "/path/to/season1" -l en --dry-run
+# Batch extract embedded subtitles across an entire movies directory
+cinesub extract "/media/Movies" -l ro
+
+# Simulate extraction without writing files to disk (dry-run)
+cinesub extract "/media/Movies" -l ro --dry-run
 
 # Overwrite existing companion .srt files
-cinesub extract "/path/to/movies" -l ro -f
+cinesub extract "/media/Movies" -l ro -f
 ```
 
-**Flags & Options:**
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `PATH` | *required* | Path to video file or directory |
-| `-l, --language` | `all` | Target language code (e.g. `ro`, `en`) or `all` |
-| `-f, --force` | `False` | Overwrite existing companion `.srt` files on disk |
-| `-d, --dry-run` | `False` | Simulate extraction without writing files |
-| `--verbose` | `False` | Enable debug logging |
+**Key Flags:**
+- `-l, --language`: Target language code (e.g. `ro`, `en`) or `all`. Default: `all`.
+- `-f, --force`: Overwrite existing companion `.srt` files on disk.
+- `-d, --dry-run`: Inspect streams without writing files.
+- `--verbose`: Enable debug logging.
 
 ---
 
-### 5. `cinesub config` — Diagnostics
+### 4. `cinesub tmdb`
 
-Inspects detected API keys, rate limits, default language, and checks whether `ffmpeg` and `ffprobe` are located on your system PATH.
+Queries TMDb for video files or directory names, resolves metadata (IMDb ID, canonical title, release year), and optionally synchronizes matched items directly to your TMDb account Watchlist (Bookmarks) or Favorites.
+
+```bash
+# Identify media items in a folder against TMDb
+cinesub tmdb "/media/Movies"
+
+# Bookmark (add to Watchlist) all matched media items in your TMDb account
+cinesub tmdb "/media/Movies" -b
+
+# Scan folder names instead of filenames (for movie-folder library structures)
+cinesub tmdb "/media/Movies" --by-folder -b
+
+# Add all matched items to both TMDb Favorites and Watchlist
+cinesub tmdb "/media/Movies" --favorite --bookmark
+
+# Simulate matching without submitting modifications to your TMDb account
+cinesub tmdb "/media/Movies" -b --dry-run
+```
+
+**Key Flags:**
+- `-b, --bookmark` / `-w, --watchlist`: Add matched media to your TMDb Watchlist.
+- `-f, --favorite`: Add matched media to your TMDb Favorites list.
+- `-F, --by-folder`: Search TMDb using folder names instead of filenames.
+- `-d, --dry-run`: Simulate search without modifying TMDb account lists.
+
+---
+
+### 5. `cinesub config`
+
+Runs a diagnostic health check on your environment. Displays active API credentials, configured rate limits, default language, and checks whether `ffmpeg` and `ffprobe` are installed on your system PATH.
 
 ```bash
 cinesub config
@@ -283,26 +279,26 @@ cinesub config
 
 ---
 
-## Technical Details & Rate Limiting
+### Interactive Runtime Controls
 
-- **Subtitle Sanitization & Encoding**:
-  - Automatically normalizes character encoding to clean UTF-8 (without BOM) using `charset-normalizer`, correctly decoding CP1250, CP1251, ISO-8859, and Asian charsets.
-  - Validates and re-indexes subtitle sequence numbers and timestamp formatting with `srt`.
-- **Rate Limits**:
-  - **OpenSubtitles.com**: Official API limit is 5 req/s. CineSub enforces a safe client-side rate limit of **4.0 req/s**.
-  - **SubDL.com**: Official API limit is 600 req/min (10 req/s). CineSub enforces **8.0 req/s**.
-  - **SubSource.net**: Official API limit is 60 req/min (1 req/s). CineSub enforces **1.0 req/s**.
-  - **Subs.ro**: Safe client-side rate limit of **2.0 req/s**.
-  - **BetaSeries.com**: Safe client-side rate limit of **2.0 req/s**.
-  - **TMDb**: Safe client-side rate limit of **4.0 req/s**.
-  - **HTTP 429 Handling**: Token-bucket rate limiters automatically pause all concurrent threads and back off according to `Retry-After` response headers.
-- **Embedded Subtitles**: Inspects container streams via `ffprobe` and extracts text tracks with `ffmpeg` without altering source media.
-- **Hash Algorithm**: Uses OpenSubtitles' 64-bit checksum over the first and last 64 KB of the file added to the total file size with vectorized 1-shot unpacking.
-- **HTTP Client**: Uses `httpx` with persistent connection pooling, HTTP/2 support, and retry handlers.
-- **JSON Engine**: `orjson` is used for fast serialization and deserialization.
-- **NAS & Plex Library Optimizations**:
-  - Prunes non-media and thumbnail directory trees (`@eaDir`, `#recycle`, `.plex`, `Featurettes`, `Trailers`) during traversal for instant scans on large NFS/SMB shares.
-  - Automatically skips media with existing valid subtitles (unless `-f, --force` is passed) for efficient incremental cron executions.
-  - Supports Plex/Emby language suffix convention (`-S, --lang-suffix`, e.g. `movie.ro.srt`).
-  - Employs atomic file replacement (`os.replace`) to prevent partial read race conditions with Plex Media Scanner.
-- **Archive Extraction & Bomb Protection**: Archive packages (`.zip`) from SubDL, SubSource, Subs.ro, and BetaSeries are unpacked in-memory with strict uncompressed size limits (max 10MB) to protect against decompression bombs.
+During long-running batch operations (`download`, `bulk`, `extract`, `tmdb`), CineSub supports interactive keyboard controls:
+
+- **`[Space]` or `p`**: Pause/Resume execution. In-flight requests complete cleanly, worker threads pause, and ETA timers halt. Press again to resume.
+- **`Ctrl+C` (SIGINT)**: Gracefully cancel pending operations, shut down thread pools, and export partial reports without leaving orphan temporary files (`.<name>.tmp`).
+
+---
+
+## Providers & Rate Limits
+
+| Provider | Type | API Key Required? | Rate Limit |
+| :--- | :--- | :---: | :--- |
+| **BSPlayer** | 64-bit Video Hash (SOAP) | **No** (Public) | 2.0 req/s |
+| **Gestdown** | TV Shows / Addic7ed REST | **No** (Public) | 2.0 req/s |
+| **AnimeTosho** | Anime Feed & Attachments | **No** (Public) | 2.0 req/s |
+| **OpenSubtitles.com** | Hash & Text Search REST | Yes (Free) | 4.0 req/s |
+| **SubDL** | Text Search REST | Yes (Free) | 8.0 req/s |
+| **SubSource** | Text Search REST | Yes (Free) | 1.0 req/s |
+| **Subs.ro** | Romanian Archive REST | Yes (Free) | 2.0 req/s |
+| **BetaSeries** | TV & Movies REST | Yes (Free) | 2.0 req/s |
+| **Assrt.net** | Shooter.cn Archive REST | Yes (Free) | 0.33 req/s |
+| **TMDb** | Metadata Enrichment & Watchlist | Yes (Free) | 4.0 req/s |
