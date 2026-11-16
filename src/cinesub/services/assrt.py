@@ -11,18 +11,15 @@ import orjson
 from cinesub.core.constants import (
     ASSRT_API_URL,
     ASSRT_FALLBACK_URL,
-    DEFAULT_TIMEOUT,
-    USER_AGENT,
 )
-from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import ASSRT_LIMITER
 from cinesub.core.utils import (
     normalize_language,
-    save_subtitle_to_disk,
     score_subtitle_candidate,
 )
+from cinesub.services.base import BaseHttpService
 
 _ASSRT_LANG_MAP: dict[str, str] = {
     "langchs": "zh",
@@ -39,7 +36,7 @@ _ASSRT_LANG_MAP: dict[str, str] = {
 }
 
 
-class AssrtService:
+class AssrtService(BaseHttpService):
     """Service client for Assrt.net API v1."""
 
     def __init__(
@@ -47,6 +44,7 @@ class AssrtService:
         api_token: str | None = None,
         base_url: str = ASSRT_API_URL,
     ) -> None:
+        super().__init__(service_name="Assrt", limiter=ASSRT_LIMITER)
         self.api_token = (
             api_token
             or os.getenv("ASSRT_API_TOKEN", "").strip()
@@ -60,27 +58,22 @@ class AssrtService:
         """Returns True if Assrt API token is configured."""
         return bool(self.api_token)
 
-    @property
-    def is_available(self) -> bool:
-        """Check if Assrt is not currently circuit-broken due to connection outage."""
-        return ASSRT_LIMITER.is_available
-
     def _headers(self) -> dict[str, str]:
-        headers = {
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json",
-        }
+        headers = super()._headers()
         if self.api_token:
             headers["Authorization"] = f"Bearer {self.api_token}"
         return headers
 
     def _send_request(
         self,
-        endpoint: str,
+        method: str,
+        url: str,
         params: dict[str, Any] | None = None,
+        content: bytes | None = None,
+        headers: dict[str, str] | None = None,
         max_retries: int = 3,
     ) -> httpx.Response:
-        """Send HTTP GET request with token-bucket rate limiting and fallback domain support."""
+        """Send HTTP request with token-bucket rate limiting and fallback domain support."""
         if not self.is_configured:
             raise RuntimeError("Assrt API token is not configured.")
 
@@ -90,31 +83,23 @@ class AssrtService:
 
         current_base = self.base_url
         for attempt in range(max_retries):
-            ASSRT_LIMITER.acquire()
-            url = f"{current_base}{endpoint}"
+            target_url = url if url.startswith("http") else f"{current_base}{url}"
             try:
-                response = SESSION.get(
-                    url,
+                return super()._send_request(
+                    method=method,
+                    url=target_url,
                     params=request_params,
-                    headers=self._headers(),
+                    content=content,
+                    headers=headers,
+                    max_retries=1,
                 )
-                if response.status_code in (429, 493):
-                    retry_after = response.headers.get("retry-after")
-                    wait_sec = float(retry_after) if retry_after and retry_after.isdigit() else 5.0
-                    code = response.status_code
-                    LOG.warning(f"Assrt rate limit ({code}) received. Pausing {wait_sec:.1f}s.")
-                    ASSRT_LIMITER.trigger_cooldown(wait_sec)
-                    continue
-
-                return response
-            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
-                ASSRT_LIMITER.mark_unreachable(60.0)
-                LOG.warning(f"Assrt server unreachable ({exc}). Skipping for 60s.")
-                raise
             except httpx.RequestError as exc:
                 if attempt == max_retries - 1:
-                    # Try fallback domain once
-                    if current_base == self.base_url and current_base != ASSRT_FALLBACK_URL:
+                    if (
+                        not url.startswith("http")
+                        and current_base == self.base_url
+                        and current_base != ASSRT_FALLBACK_URL
+                    ):
                         current_base = ASSRT_FALLBACK_URL
                         continue
                     raise
@@ -171,7 +156,7 @@ class AssrtService:
         }
 
         try:
-            response = self._send_request("/sub/search", params=params)
+            response = self._send_request("GET", "/sub/search", params=params)
             if response.status_code != 200:
                 return []
             payload = orjson.loads(response.content)
@@ -189,7 +174,7 @@ class AssrtService:
             params["q"] = video_meta.title
             params["is_file"] = 0
             try:
-                fallback_resp = self._send_request("/sub/search", params=params)
+                fallback_resp = self._send_request("GET", "/sub/search", params=params)
                 if fallback_resp.status_code == 200:
                     fallback_payload = orjson.loads(fallback_resp.content)
                     if fallback_payload.get("status", 0) == 0:
@@ -256,6 +241,7 @@ class AssrtService:
             return subtitle.download_url
 
         response = self._send_request(
+            "GET",
             "/sub/detail",
             params={"id": subtitle.id, "filelist": 1},
         )
@@ -285,13 +271,5 @@ class AssrtService:
 
     def download(self, subtitle: SubtitleMatch, destination: Path) -> Path:
         """Download subtitle from Assrt, unpack if archive, and normalize to UTF-8 SRT."""
-        download_url = self._resolve_download_url(subtitle)
-
-        ASSRT_LIMITER.acquire()
-        response = SESSION.get(download_url, headers=self._headers(), timeout=DEFAULT_TIMEOUT)
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"Assrt download failed with status {response.status_code}: {response.text[:100]}"
-            )
-
-        return save_subtitle_to_disk(response.content, destination)
+        subtitle.download_url = self._resolve_download_url(subtitle)
+        return super().download(subtitle, destination)

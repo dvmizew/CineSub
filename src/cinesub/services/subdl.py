@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -13,7 +12,6 @@ from cinesub.core.constants import (
     SUBDL_API_URL,
     SUBDL_DL_URL,
 )
-from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import SUBDL_LIMITER
@@ -21,59 +19,19 @@ from cinesub.core.utils import (
     save_subtitle_to_disk,
     score_subtitle_candidate,
 )
+from cinesub.services.base import BaseHttpService
 
 
-class SubdlService:
+class SubdlService(BaseHttpService):
     """Service client for SubDL API."""
 
     def __init__(self, api_key: str | None = None) -> None:
+        super().__init__(service_name="SubDL", limiter=SUBDL_LIMITER)
         self.api_key = api_key or os.getenv("SUBDL_API_KEY", "").strip() or None
 
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key)
-
-    @property
-    def is_available(self) -> bool:
-        """Check if SubDL is not currently circuit-broken due to connection outage."""
-        return SUBDL_LIMITER.is_available
-
-    def _send_request(
-        self,
-        method: str,
-        url: str,
-        params: dict[str, Any] | None = None,
-        max_retries: int = 3,
-    ) -> httpx.Response:
-        """Send HTTP request with token-bucket rate limiting and 429 backoff."""
-        for attempt in range(max_retries):
-            SUBDL_LIMITER.acquire()
-            try:
-                resp = SESSION.request(
-                    method=method,
-                    url=url,
-                    params=params,
-                )
-                if resp.status_code == 429:
-                    retry_after = resp.headers.get("retry-after")
-                    wait_sec = float(retry_after) if retry_after and retry_after.isdigit() else 5.0
-                    LOG.warning(f"SubDL 429 rate limit received. Pausing for {wait_sec:.1f}s.")
-                    SUBDL_LIMITER.trigger_cooldown(wait_sec)
-                    continue
-
-                return resp
-            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
-                SUBDL_LIMITER.mark_unreachable(60.0)
-                LOG.warning(f"SubDL server unreachable ({exc}). Skipping for 60s.")
-                raise
-            except httpx.RequestError as exc:
-                if attempt == max_retries - 1:
-                    raise
-                backoff_delay = 0.5 * (2**attempt)
-                LOG.debug(f"SubDL network error ({exc}), retrying in {backoff_delay:.1f}s...")
-                time.sleep(backoff_delay)
-
-        raise RuntimeError("SubDL request failed after retries.")
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search SubDL for matching subtitles."""

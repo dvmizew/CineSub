@@ -18,6 +18,7 @@ from cinesub.core.utils import (
     save_subtitle_to_disk,
     score_subtitle_candidate,
 )
+from cinesub.services.base import BaseHttpService
 
 _SOAP_ENVELOPE_TEMPLATE = (
     '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -35,21 +36,12 @@ _SOAP_ENVELOPE_TEMPLATE = (
 _SUBDOMAINS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 8, 101, 102, 103, 104, 105, 106, 107, 108, 109)
 
 
-class BsplayerService:
+class BsplayerService(BaseHttpService):
     """Service client for BSPlayer SOAP/XML subtitle API."""
 
     def __init__(self, endpoint_url: str | None = None) -> None:
+        super().__init__(service_name="BSPlayer", limiter=BSPLAYER_LIMITER)
         self.endpoint_url = endpoint_url
-
-    @property
-    def is_configured(self) -> bool:
-        """BSPlayer is a free service requiring no user credentials."""
-        return True
-
-    @property
-    def is_available(self) -> bool:
-        """Check if BSPlayer is not currently circuit-broken due to connection outage."""
-        return BSPLAYER_LIMITER.is_available
 
     def _resolve_endpoint(self) -> str:
         if self.endpoint_url:

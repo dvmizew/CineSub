@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import os
-import time
 from typing import Any
 
 import httpx
 import orjson
 
-from cinesub.core.constants import TMDB_API_URL, USER_AGENT
-from cinesub.core.http import SESSION
+from cinesub.core.constants import TMDB_API_URL
 from cinesub.core.logger import LOG
 from cinesub.core.models import VideoMetadata
 from cinesub.core.ratelimit import TMDB_LIMITER
+from cinesub.services.base import BaseHttpService
 
 
-class TmdbService:
+class TmdbService(BaseHttpService):
     """Service client for The Movie Database (TMDb) REST API v3/v4."""
 
     def __init__(
@@ -23,6 +22,7 @@ class TmdbService:
         api_key: str | None = None,
         account_id: str | int | None = None,
     ) -> None:
+        super().__init__(service_name="TMDb", limiter=TMDB_LIMITER)
         self.access_token = (
             access_token
             or os.getenv("TMDB_READ_ACCESS_TOKEN", "").strip()
@@ -36,17 +36,9 @@ class TmdbService:
     def is_configured(self) -> bool:
         return bool(self.access_token or self.api_key)
 
-    @property
-    def is_available(self) -> bool:
-        """Check if TMDb is not currently circuit-broken due to connection outage."""
-        return TMDB_LIMITER.is_available
-
     def _headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "User-Agent": USER_AGENT,
-        }
+        headers = super()._headers()
+        headers["Content-Type"] = "application/json"
         if self.access_token:
             headers["Authorization"] = f"Bearer {self.access_token}"
         return headers
@@ -54,47 +46,30 @@ class TmdbService:
     def _send_request(
         self,
         method: str,
-        path: str,
+        url: str,
         params: dict[str, Any] | None = None,
         content: bytes | None = None,
+        headers: dict[str, str] | None = None,
         max_retries: int = 3,
     ) -> httpx.Response:
         """Send HTTP request with token-bucket rate limiting and 429 backoff."""
-        url = f"{TMDB_API_URL}/{path.lstrip('/')}"
+        full_url = url if url.startswith("http") else f"{TMDB_API_URL}/{url.lstrip('/')}"
         query_params: dict[str, Any] = dict(params or {})
         if not self.access_token and self.api_key:
             query_params["api_key"] = self.api_key
 
-        for attempt in range(max_retries):
-            TMDB_LIMITER.acquire()
-            try:
-                resp = SESSION.request(
-                    method=method,
-                    url=url,
-                    params=query_params,
-                    content=content,
-                    headers=self._headers(),
-                )
-                if resp.status_code == 429:
-                    retry_after = resp.headers.get("retry-after")
-                    wait_sec = float(retry_after) if retry_after and retry_after.isdigit() else 5.0
-                    LOG.warning(f"TMDb 429 rate limit received. Pausing for {wait_sec:.1f}s.")
-                    TMDB_LIMITER.trigger_cooldown(wait_sec)
-                    continue
+        req_headers = self._headers()
+        if headers:
+            req_headers.update(headers)
 
-                return resp
-            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
-                TMDB_LIMITER.mark_unreachable(60.0)
-                LOG.warning(f"TMDb server unreachable ({exc}). Skipping for 60s.")
-                raise
-            except httpx.RequestError as exc:
-                if attempt == max_retries - 1:
-                    raise
-                backoff_delay = 0.5 * (2**attempt)
-                LOG.debug(f"TMDb network error ({exc}), retrying in {backoff_delay:.1f}s...")
-                time.sleep(backoff_delay)
-
-        raise RuntimeError("TMDb request failed after retries.")
+        return super()._send_request(
+            method=method,
+            url=full_url,
+            params=query_params,
+            content=content,
+            headers=req_headers,
+            max_retries=max_retries,
+        )
 
     def search_movie(self, title: str, year: int | None = None) -> dict[str, Any] | None:
         """Search TMDb for a movie by title and optional release year."""

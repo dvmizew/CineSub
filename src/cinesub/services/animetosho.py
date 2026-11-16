@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import time
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -10,21 +8,19 @@ import orjson
 from cinesub.core.constants import (
     ANIMETOSHO_FEED_URL,
     ANIMETOSHO_STORAGE_URL,
-    USER_AGENT,
 )
-from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import ANIMETOSHO_LIMITER
 from cinesub.core.utils import (
     languages_match,
     normalize_language,
-    save_subtitle_to_disk,
     score_subtitle_candidate,
 )
+from cinesub.services.base import BaseHttpService
 
 
-class AnimeToshoService:
+class AnimeToshoService(BaseHttpService):
     """Service client for AnimeTosho JSON feed and storage attachments."""
 
     def __init__(
@@ -32,60 +28,9 @@ class AnimeToshoService:
         feed_url: str = ANIMETOSHO_FEED_URL,
         storage_url: str = ANIMETOSHO_STORAGE_URL,
     ) -> None:
+        super().__init__(service_name="AnimeTosho", limiter=ANIMETOSHO_LIMITER)
         self.feed_url = feed_url
         self.storage_url = storage_url.rstrip("/")
-
-    @property
-    def is_configured(self) -> bool:
-        """AnimeTosho is a public service requiring no API key."""
-        return True
-
-    @property
-    def is_available(self) -> bool:
-        """Check if AnimeTosho is not currently circuit-broken due to connection outage."""
-        return ANIMETOSHO_LIMITER.is_available
-
-    def _headers(self) -> dict[str, str]:
-        return {
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json",
-        }
-
-    def _send_request(
-        self,
-        url: str,
-        params: dict[str, Any] | None = None,
-        max_retries: int = 3,
-    ) -> httpx.Response:
-        """Send HTTP GET request with token-bucket rate limiting and retries."""
-        for attempt in range(max_retries):
-            ANIMETOSHO_LIMITER.acquire()
-            try:
-                response = SESSION.get(
-                    url,
-                    params=params,
-                    headers=self._headers(),
-                )
-                if response.status_code == 429:
-                    retry_after = response.headers.get("retry-after")
-                    wait_sec = float(retry_after) if retry_after and retry_after.isdigit() else 5.0
-                    LOG.warning(f"AnimeTosho 429 received. Pausing for {wait_sec:.1f}s.")
-                    ANIMETOSHO_LIMITER.trigger_cooldown(wait_sec)
-                    continue
-
-                return response
-            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
-                ANIMETOSHO_LIMITER.mark_unreachable(60.0)
-                LOG.warning(f"AnimeTosho server unreachable ({exc}). Skipping for 60s.")
-                raise
-            except httpx.RequestError as exc:
-                if attempt == max_retries - 1:
-                    raise
-                backoff_delay = 0.5 * (2**attempt)
-                LOG.debug(f"AnimeTosho network error ({exc}), retrying in {backoff_delay:.1f}s...")
-                time.sleep(backoff_delay)
-
-        raise RuntimeError("AnimeTosho request failed after retries.")
 
     def _match_language(self, track_lang: str, target_lang: str) -> bool:
         """Verify whether candidate track language matches requested language code."""
@@ -113,7 +58,7 @@ class AnimeToshoService:
         }
 
         try:
-            feed_response = self._send_request(self.feed_url, params=params)
+            feed_response = self._send_request("GET", self.feed_url, params=params)
             if feed_response.status_code != 200:
                 return []
             releases = orjson.loads(feed_response.content)
@@ -138,6 +83,7 @@ class AnimeToshoService:
             # Query detail endpoint to inspect attachments
             try:
                 detail_response = self._send_request(
+                    "GET",
                     self.feed_url,
                     params={"show": "torrent", "id": release_id},
                 )
@@ -190,16 +136,3 @@ class AnimeToshoService:
 
         matches.sort(key=lambda match_candidate: match_candidate.score, reverse=True)
         return matches
-
-    def download(self, subtitle: SubtitleMatch, destination: Path) -> Path:
-        """Download subtitle attachment from AnimeTosho, unpack XZ, and normalize to SRT."""
-        if not subtitle.download_url:
-            raise ValueError("AnimeTosho match missing download URL.")
-
-        response = self._send_request(subtitle.download_url)
-        if response.status_code != 200:
-            status = response.status_code
-            snippet = response.text[:100]
-            raise RuntimeError(f"AnimeTosho download failed with status {status}: {snippet}")
-
-        return save_subtitle_to_disk(response.content, destination)

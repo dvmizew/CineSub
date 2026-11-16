@@ -77,11 +77,12 @@ def _render_stats_card(
     action_val = f"{action_count} ({match_pct:.1f}%)"
     action_color = "yellow" if is_dry_run else "green"
 
+    speed_text = f"{throughput:.1f} files/s ({duration:.1f}s)"
     stats_grid.add_row(
         f"[dim]Total Scanned[/dim]\n[bold white]{total} media files[/bold white]",
         f"[dim]{action_label}[/dim]\n[bold {action_color}]{action_val}[/bold {action_color}]",
         f"[dim]Skipped / Failed[/dim]\n[bold white]{skipped} skip / {failed} fail[/bold white]",
-        f"[dim]Throughput / Speed[/dim]\n[bold cyan]{throughput:.1f} files/s[/bold cyan]",
+        f"[dim]Throughput / Time[/dim]\n[bold cyan]{speed_text}[/bold cyan]",
     )
 
     border_color = "yellow" if is_dry_run else "green"

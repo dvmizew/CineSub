@@ -1,30 +1,28 @@
 from __future__ import annotations
 
 import os
-import time
-from pathlib import Path
 from typing import Any
 
 import httpx
 import orjson
 
 from cinesub.core.constants import BETASERIES_API_URL, USER_AGENT
-from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import BETASERIES_LIMITER
 from cinesub.core.utils import (
     normalize_language,
-    save_subtitle_to_disk,
     score_subtitle_candidate,
 )
+from cinesub.services.base import BaseHttpService
 from cinesub.services.tmdb import TmdbService
 
 
-class BetaSeriesService:
+class BetaSeriesService(BaseHttpService):
     """Service client for BetaSeries REST API v3.0."""
 
     def __init__(self, api_key: str | None = None) -> None:
+        super().__init__(service_name="BetaSeries", limiter=BETASERIES_LIMITER)
         self.api_key = (
             api_key
             or os.getenv("BETASERIES_API_KEY", "").strip()
@@ -36,11 +34,6 @@ class BetaSeriesService:
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
-    @property
-    def is_available(self) -> bool:
-        """Check if BetaSeries is not currently circuit-broken due to connection outage."""
-        return BETASERIES_LIMITER.is_available
-
     def _headers(self) -> dict[str, str]:
         return {
             "X-BetaSeries-Key": self.api_key or "",
@@ -48,50 +41,6 @@ class BetaSeriesService:
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
         }
-
-    def _send_request(
-        self,
-        method: str,
-        url: str,
-        params: dict[str, Any] | None = None,
-        max_retries: int = 3,
-    ) -> httpx.Response:
-        """Send HTTP request with token-bucket rate limiting and 429 backoff."""
-        for attempt in range(max_retries):
-            BETASERIES_LIMITER.acquire()
-            try:
-                resp = SESSION.request(
-                    method=method,
-                    url=url,
-                    params=params,
-                    headers=self._headers(),
-                )
-                if resp.status_code == 429:
-                    retry_after = resp.headers.get("retry-after")
-                    wait_sec = float(retry_after) if retry_after and retry_after.isdigit() else 5.0
-                    LOG.warning(f"BetaSeries 429 rate limit received. Pausing for {wait_sec:.1f}s.")
-                    BETASERIES_LIMITER.trigger_cooldown(wait_sec)
-                    continue
-
-                remaining_hdr = resp.headers.get("x-ratelimit-remaining")
-                if remaining_hdr and remaining_hdr.isdigit() and int(remaining_hdr) == 0:
-                    reset_hdr = resp.headers.get("x-ratelimit-reset")
-                    wait_sec = float(reset_hdr) if reset_hdr and reset_hdr.isdigit() else 1.0
-                    BETASERIES_LIMITER.trigger_cooldown(wait_sec)
-
-                return resp
-            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
-                BETASERIES_LIMITER.mark_unreachable(60.0)
-                LOG.warning(f"BetaSeries server unreachable ({exc}). Skipping for 60s.")
-                raise
-            except httpx.RequestError as exc:
-                if attempt == max_retries - 1:
-                    raise
-                backoff_delay = 0.5 * (2**attempt)
-                LOG.debug(f"BetaSeries network error ({exc}), retrying in {backoff_delay:.1f}s...")
-                time.sleep(backoff_delay)
-
-        raise RuntimeError("BetaSeries request failed after retries.")
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search BetaSeries for subtitles by IMDb ID or title query."""
@@ -110,7 +59,7 @@ class BetaSeriesService:
             if video_meta.is_episode and video_meta.season and video_meta.episode:
                 subs_list = self._search_episode(video_meta, target_lang)
             else:
-                subs_list = self._search_movie(video_meta, target_lang)
+                subs_list = self._search_movie(target_lang)
 
             results: list[SubtitleMatch] = []
             for sub_entry in subs_list:
@@ -206,7 +155,7 @@ class BetaSeriesService:
 
         return filtered
 
-    def _search_movie(self, video_meta: VideoMetadata, language: str) -> list[dict[str, Any]]:
+    def _search_movie(self, language: str) -> list[dict[str, Any]]:
         """Search subtitles for a movie."""
         endpoint = f"{BETASERIES_API_URL}/subtitles/last"
         params: dict[str, Any] = {
@@ -240,16 +189,3 @@ class BetaSeriesService:
             return []
 
         return raw_subtitles
-
-    def download(self, subtitle: SubtitleMatch, destination: Path) -> Path:
-        """Download subtitle from BetaSeries, extract matching SRT, and normalize to UTF-8."""
-        if not subtitle.download_url:
-            raise ValueError("BetaSeries match missing download URL.")
-
-        resp = self._send_request("GET", subtitle.download_url)
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"BetaSeries download failed with status {resp.status_code}: {resp.text[:100]}"
-            )
-
-        return save_subtitle_to_disk(resp.content, destination)

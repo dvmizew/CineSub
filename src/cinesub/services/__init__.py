@@ -1,5 +1,6 @@
 from cinesub.services.animetosho import AnimeToshoService
 from cinesub.services.assrt import AssrtService
+from cinesub.services.base import BaseHttpService
 from cinesub.services.betaseries import BetaSeriesService
 from cinesub.services.bsplayer import BsplayerService
 from cinesub.services.gestdown import GestdownService
@@ -12,6 +13,7 @@ from cinesub.services.tmdb import TmdbService
 __all__ = [
     "AnimeToshoService",
     "AssrtService",
+    "BaseHttpService",
     "BetaSeriesService",
     "BsplayerService",
     "GestdownService",

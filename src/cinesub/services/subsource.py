@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import os
-import time
-from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
@@ -14,30 +12,23 @@ from cinesub.core.constants import (
     SUBSOURCE_API_URL,
     USER_AGENT,
 )
-from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import SUBSOURCE_LIMITER
-from cinesub.core.utils import (
-    save_subtitle_to_disk,
-    score_subtitle_candidate,
-)
+from cinesub.core.utils import score_subtitle_candidate
+from cinesub.services.base import BaseHttpService
 
 
-class SubsourceService:
+class SubsourceService(BaseHttpService):
     """Service client for SubSource.net REST API v1."""
 
     def __init__(self, api_key: str | None = None) -> None:
+        super().__init__(service_name="SubSource", limiter=SUBSOURCE_LIMITER)
         self.api_key = api_key or os.getenv("SUBSOURCE_API_KEY", "").strip() or None
 
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key)
-
-    @property
-    def is_available(self) -> bool:
-        """Check if SubSource is not currently circuit-broken due to connection outage."""
-        return SUBSOURCE_LIMITER.is_available
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -45,50 +36,6 @@ class SubsourceService:
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
         }
-
-    def _send_request(
-        self,
-        method: str,
-        url: str,
-        params: dict[str, Any] | None = None,
-        max_retries: int = 3,
-    ) -> httpx.Response:
-        """Send HTTP request with token-bucket rate limiting and 429 backoff."""
-        for attempt in range(max_retries):
-            SUBSOURCE_LIMITER.acquire()
-            try:
-                resp = SESSION.request(
-                    method=method,
-                    url=url,
-                    params=params,
-                    headers=self._headers(),
-                )
-                if resp.status_code == 429:
-                    retry_after = resp.headers.get("retry-after")
-                    wait_sec = float(retry_after) if retry_after and retry_after.isdigit() else 5.0
-                    LOG.warning(f"SubSource 429 rate limit received. Pausing for {wait_sec:.1f}s.")
-                    SUBSOURCE_LIMITER.trigger_cooldown(wait_sec)
-                    continue
-
-                remaining_hdr = resp.headers.get("x-ratelimit-remaining")
-                if remaining_hdr and remaining_hdr.isdigit() and int(remaining_hdr) == 0:
-                    reset_hdr = resp.headers.get("x-ratelimit-reset")
-                    wait_sec = float(reset_hdr) if reset_hdr and reset_hdr.isdigit() else 1.0
-                    SUBSOURCE_LIMITER.trigger_cooldown(wait_sec)
-
-                return resp
-            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
-                SUBSOURCE_LIMITER.mark_unreachable(60.0)
-                LOG.warning(f"SubSource server unreachable ({exc}). Skipping for 60s.")
-                raise
-            except httpx.RequestError as exc:
-                if attempt == max_retries - 1:
-                    raise
-                backoff_delay = 0.5 * (2**attempt)
-                LOG.debug(f"SubSource network error ({exc}), retrying in {backoff_delay:.1f}s...")
-                time.sleep(backoff_delay)
-
-        raise RuntimeError("SubSource request failed after retries.")
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search SubSource for matching subtitles by media lookup and candidate scoring."""
@@ -222,13 +169,3 @@ class SubsourceService:
         except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"SubSource search error: {exc}")
             return []
-
-    def download(self, subtitle: SubtitleMatch, destination: Path) -> Path:
-        """Download subtitle from SubSource, unpack if needed, and normalize encoding to UTF-8."""
-        if not subtitle.download_url:
-            raise ValueError("SubSource match missing download URL.")
-
-        resp = self._send_request("GET", subtitle.download_url)
-        resp.raise_for_status()
-
-        return save_subtitle_to_disk(resp.content, destination)

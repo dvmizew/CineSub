@@ -62,7 +62,7 @@ def test_opensubtitles_search_and_download(
             )
         return httpx.Response(404, request=httpx.Request(method, url))
 
-    with patch("cinesub.services.opensubtitles.SESSION.request", side_effect=mock_request):
+    with patch("cinesub.services.base.SESSION.request", side_effect=mock_request):
         matches = service.search(sample_video_meta, language="en")
         assert len(matches) == 1
         assert matches[0].matched_by_hash is True
@@ -110,7 +110,7 @@ def test_opensubtitles_tv_episode_search(tmp_path: Path) -> None:
             )
         return httpx.Response(404, request=httpx.Request(method, url))
 
-    with patch("cinesub.services.opensubtitles.SESSION.request", side_effect=mock_request):
+    with patch("cinesub.services.base.SESSION.request", side_effect=mock_request):
         matches = service.search(tv_meta, language="ro")
         assert len(matches) == 1
         assert matches[0].release_name == "Breaking.Bad.S01E01.720p.HDTV.x264-CTU"
@@ -147,7 +147,7 @@ def test_opensubtitles_gzip_download(tmp_path: Path) -> None:
     )
 
     dest = tmp_path / "Test.srt"
-    with patch("cinesub.services.opensubtitles.SESSION.request", side_effect=mock_request):
+    with patch("cinesub.services.base.SESSION.request", side_effect=mock_request):
         service.download(match, dest)
         assert dest.is_file()
         assert "Gzip Decompressed Subtitle" in dest.read_text()
@@ -181,7 +181,7 @@ def test_subdl_search_and_zip_download(sample_video_meta: VideoMetadata, tmp_pat
             return httpx.Response(200, content=zip_bytes, request=httpx.Request(method, url))
         return httpx.Response(404, request=httpx.Request(method, url))
 
-    with patch("cinesub.services.subdl.SESSION.request", side_effect=mock_request):
+    with patch("cinesub.services.base.SESSION.request", side_effect=mock_request):
         matches = service.search(sample_video_meta, language="en")
         assert len(matches) == 1
         assert matches[0].provider == "subdl"
@@ -226,7 +226,7 @@ def test_subdl_tv_series_search(tmp_path: Path) -> None:
             )
         return httpx.Response(404, request=httpx.Request(method, url))
 
-    with patch("cinesub.services.subdl.SESSION.request", side_effect=mock_request):
+    with patch("cinesub.services.base.SESSION.request", side_effect=mock_request):
         matches = service.search(tv_meta, language="ro")
         assert len(matches) == 1
         assert len(captured_params) == 1
@@ -307,7 +307,7 @@ def test_subsource_search_and_download(sample_video_meta: VideoMetadata, tmp_pat
             return httpx.Response(200, content=zip_bytes, request=httpx.Request(method, url))
         return httpx.Response(404, request=httpx.Request(method, url))
 
-    with patch("cinesub.services.subsource.SESSION.request", side_effect=mock_request):
+    with patch("cinesub.services.base.SESSION.request", side_effect=mock_request):
         matches = service.search(sample_video_meta, language="ro")
         assert len(matches) == 1
         assert matches[0].provider == "subsource"
@@ -343,7 +343,7 @@ def test_subsource_search_fuzzy_mismatch_returns_empty(
     }
 
     with patch(
-        "cinesub.services.subsource.SESSION.request",
+        "cinesub.services.base.SESSION.request",
         return_value=httpx.Response(
             200,
             json=mock_unrelated_movies,
@@ -391,7 +391,7 @@ def test_tmdb_service_search_and_enrichment(sample_video_meta: VideoMetadata) ->
             )
         return httpx.Response(404, request=httpx.Request(method, url))
 
-    with patch("cinesub.services.tmdb.SESSION.request", side_effect=mock_request):
+    with patch("cinesub.services.base.SESSION.request", side_effect=mock_request):
         # 1. Search movie
         movie = service.search_movie("Inception", 2010)
         assert movie is not None
@@ -452,7 +452,7 @@ def test_subsro_search_and_download(sample_video_meta: VideoMetadata, tmp_path: 
             return httpx.Response(200, content=zip_bytes, request=httpx.Request(method, url))
         return httpx.Response(404, request=httpx.Request(method, url))
 
-    with patch("cinesub.services.subsro.SESSION.request", side_effect=mock_request):
+    with patch("cinesub.services.base.SESSION.request", side_effect=mock_request):
         matches = service.search(video_meta, language="ro")
         assert len(matches) == 1
         assert matches[0].provider == "subsro"
@@ -483,7 +483,7 @@ def test_subsro_decompression_bomb_protection(tmp_path: Path) -> None:
     )
 
     with patch(
-        "cinesub.services.subsro.SESSION.request",
+        "cinesub.services.base.SESSION.request",
         return_value=httpx.Response(
             200, content=huge_bytes, request=httpx.Request("GET", "https://subs.ro")
         ),
@@ -509,7 +509,7 @@ def test_subdl_decompression_bomb_protection(tmp_path: Path) -> None:
     )
 
     with patch(
-        "cinesub.services.subdl.SESSION.request",
+        "cinesub.services.base.SESSION.request",
         return_value=httpx.Response(
             200, content=huge_bytes, request=httpx.Request("GET", "https://dl.subdl.com")
         ),
@@ -535,7 +535,7 @@ def test_subsource_decompression_bomb_protection(tmp_path: Path) -> None:
     )
 
     with patch(
-        "cinesub.services.subsource.SESSION.request",
+        "cinesub.services.base.SESSION.request",
         return_value=httpx.Response(
             200, content=huge_bytes, request=httpx.Request("GET", "https://api.subsource.net")
         ),
@@ -576,7 +576,7 @@ def test_betaseries_movie_search_and_download(
             return httpx.Response(200, content=zip_bytes, request=httpx.Request(method, url))
         return httpx.Response(404, request=httpx.Request(method, url))
 
-    with patch("cinesub.services.betaseries.SESSION.request", side_effect=mock_request):
+    with patch("cinesub.services.base.SESSION.request", side_effect=mock_request):
         matches = service.search(sample_video_meta, language="en")
         assert len(matches) == 1
         assert matches[0].provider == "betaseries"
@@ -622,7 +622,7 @@ def test_betaseries_episode_search(tmp_path: Path) -> None:
     }
 
     with patch(
-        "cinesub.services.betaseries.SESSION.request",
+        "cinesub.services.base.SESSION.request",
         return_value=httpx.Response(
             200,
             json=mock_episode_payload,
@@ -668,7 +668,7 @@ def test_betaseries_episode_search_no_match_returns_empty(tmp_path: Path) -> Non
     }
 
     with patch(
-        "cinesub.services.betaseries.SESSION.request",
+        "cinesub.services.base.SESSION.request",
         return_value=httpx.Response(
             200,
             json=mock_mismatched_payload,
@@ -696,7 +696,7 @@ def test_betaseries_decompression_bomb_protection(tmp_path: Path) -> None:
     )
 
     with patch(
-        "cinesub.services.betaseries.SESSION.request",
+        "cinesub.services.base.SESSION.request",
         return_value=httpx.Response(
             200, content=huge_bytes, request=httpx.Request("GET", "https://api.betaseries.com")
         ),
@@ -710,7 +710,7 @@ def test_betaseries_error_4001_handling(sample_video_meta: VideoMetadata) -> Non
     error_4001_payload = {"errors": [{"code": 4001, "text": "La série n'existe pas"}]}
 
     with patch(
-        "cinesub.services.betaseries.SESSION.request",
+        "cinesub.services.base.SESSION.request",
         return_value=httpx.Response(
             400,
             json=error_4001_payload,
@@ -738,7 +738,7 @@ def test_opensubtitles_download_quota_exhausted(tmp_path: Path) -> None:
     )
 
     with patch(
-        "cinesub.services.opensubtitles.SESSION.request",
+        "cinesub.services.base.SESSION.request",
         return_value=httpx.Response(
             406,
             json=quota_406_payload,
@@ -769,7 +769,7 @@ def test_rate_limiter_http_429_backoff_and_retry(sample_video_file: Path) -> Non
         return httpx.Response(200, json={"data": []}, request=httpx.Request(method, url))
 
     with (
-        patch("cinesub.services.opensubtitles.SESSION.request", side_effect=mock_request),
+        patch("cinesub.services.base.SESSION.request", side_effect=mock_request),
         patch("cinesub.core.ratelimit.OPENSUBTITLES_LIMITER.trigger_cooldown") as mock_cooldown,
     ):
         matches = service.search(video_meta, language="en")
@@ -822,7 +822,7 @@ def test_gestdown_search_and_download(tmp_path: Path) -> None:
             )
         return httpx.Response(404, request=httpx.Request(method, url))
 
-    with patch("cinesub.services.gestdown.SESSION.request", side_effect=mock_gestdown_request):
+    with patch("cinesub.services.base.SESSION.request", side_effect=mock_gestdown_request):
         matches = service.search(tv_meta, language="en")
         assert len(matches) == 1
         assert matches[0].id == "sub-uuid-10"
@@ -968,7 +968,7 @@ def test_animetosho_search_and_download(tmp_path: Path) -> None:
     )
     xz_compressed_bytes = lzma.compress(ass_content)
 
-    def mock_animetosho_get(url: str, **kwargs: Any) -> httpx.Response:
+    def mock_animetosho_get(method: str = "GET", url: str = "", **kwargs: Any) -> httpx.Response:
         params = kwargs.get("params", {})
         if "feed.animetosho.org" in url:
             if params.get("show") == "torrent":
@@ -982,7 +982,7 @@ def test_animetosho_search_and_download(tmp_path: Path) -> None:
             )
         return httpx.Response(404, request=httpx.Request("GET", url))
 
-    with patch("cinesub.services.animetosho.SESSION.get", side_effect=mock_animetosho_get):
+    with patch("cinesub.services.base.SESSION.request", side_effect=mock_animetosho_get):
         matches = service.search(anime_meta, language="en")
         assert len(matches) == 1
         assert matches[0].id == "1234:4321"
@@ -1021,14 +1021,14 @@ def test_assrt_search_and_download(sample_video_meta: VideoMetadata, tmp_path: P
 
     raw_srt_bytes = b"1\n00:00:01,000 --> 00:00:03,000\nAssrt Chinese/English Subtitle\n"
 
-    def mock_assrt_get(url: str, **kwargs: Any) -> httpx.Response:
+    def mock_assrt_get(method: str = "GET", url: str = "", **kwargs: Any) -> httpx.Response:
         if "/sub/search" in url:
             return httpx.Response(200, json=search_payload, request=httpx.Request("GET", url))
         if "download/8888" in url:
             return httpx.Response(200, content=raw_srt_bytes, request=httpx.Request("GET", url))
         return httpx.Response(404, request=httpx.Request("GET", url))
 
-    with patch("cinesub.services.assrt.SESSION.get", side_effect=mock_assrt_get):
+    with patch("cinesub.services.base.SESSION.request", side_effect=mock_assrt_get):
         matches = service.search(sample_video_meta, language="en")
         assert len(matches) == 1
         assert matches[0].id == "8888"

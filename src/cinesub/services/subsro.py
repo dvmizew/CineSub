@@ -1,30 +1,27 @@
 from __future__ import annotations
 
 import os
-import time
-from pathlib import Path
-from typing import Any
 
 import httpx
 import orjson
 
 from cinesub.core.constants import SUBSRO_API_URL, USER_AGENT
-from cinesub.core.http import SESSION
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import SUBSRO_LIMITER
 from cinesub.core.utils import (
     normalize_language,
-    save_subtitle_to_disk,
     score_subtitle_candidate,
 )
+from cinesub.services.base import BaseHttpService
 from cinesub.services.tmdb import TmdbService
 
 
-class SubsRoService:
+class SubsRoService(BaseHttpService):
     """Service client for Subs.ro REST API v1.0."""
 
     def __init__(self, api_key: str | None = None) -> None:
+        super().__init__(service_name="Subs.ro", limiter=SUBSRO_LIMITER)
         self.api_key = (
             api_key
             or os.getenv("SUBSRO_API_KEY", "").strip()
@@ -36,61 +33,12 @@ class SubsRoService:
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
-    @property
-    def is_available(self) -> bool:
-        """Check if Subs.ro is not currently circuit-broken due to connection outage."""
-        return SUBSRO_LIMITER.is_available
-
     def _headers(self) -> dict[str, str]:
         return {
             "X-Subs-Api-Key": self.api_key or "",
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
         }
-
-    def _send_request(
-        self,
-        method: str,
-        url: str,
-        params: dict[str, Any] | None = None,
-        max_retries: int = 3,
-    ) -> httpx.Response:
-        """Send HTTP request with token-bucket rate limiting and 429 backoff."""
-        for attempt in range(max_retries):
-            SUBSRO_LIMITER.acquire()
-            try:
-                resp = SESSION.request(
-                    method=method,
-                    url=url,
-                    params=params,
-                    headers=self._headers(),
-                )
-                if resp.status_code == 429:
-                    retry_after = resp.headers.get("retry-after")
-                    wait_sec = float(retry_after) if retry_after and retry_after.isdigit() else 5.0
-                    LOG.warning(f"Subs.ro 429 rate limit received. Pausing for {wait_sec:.1f}s.")
-                    SUBSRO_LIMITER.trigger_cooldown(wait_sec)
-                    continue
-
-                remaining_hdr = resp.headers.get("x-ratelimit-remaining")
-                if remaining_hdr and remaining_hdr.isdigit() and int(remaining_hdr) == 0:
-                    reset_hdr = resp.headers.get("x-ratelimit-reset")
-                    wait_sec = float(reset_hdr) if reset_hdr and reset_hdr.isdigit() else 1.0
-                    SUBSRO_LIMITER.trigger_cooldown(wait_sec)
-
-                return resp
-            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
-                SUBSRO_LIMITER.mark_unreachable(60.0)
-                LOG.warning(f"Subs.ro server unreachable ({exc}). Skipping for 60s.")
-                raise
-            except httpx.RequestError as exc:
-                if attempt == max_retries - 1:
-                    raise
-                backoff_delay = 0.5 * (2**attempt)
-                LOG.debug(f"Subs.ro network error ({exc}), retrying in {backoff_delay:.1f}s...")
-                time.sleep(backoff_delay)
-
-        raise RuntimeError("Subs.ro request failed after retries.")
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search Subs.ro for matching subtitles by IMDb ID and candidate scoring."""
@@ -172,16 +120,3 @@ class SubsRoService:
         except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"Subs.ro search error for {video_meta.title}: {exc}")
             return []
-
-    def download(self, subtitle: SubtitleMatch, destination: Path) -> Path:
-        """Download subtitle archive from Subs.ro, extract matching SRT, and normalize to UTF-8."""
-        if not subtitle.download_url:
-            raise ValueError("Subs.ro match missing download URL.")
-
-        resp = self._send_request("GET", subtitle.download_url)
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"Subs.ro download failed with status {resp.status_code}: {resp.text[:100]}"
-            )
-
-        return save_subtitle_to_disk(resp.content, destination)

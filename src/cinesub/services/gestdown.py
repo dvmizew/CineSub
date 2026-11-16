@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import time
-from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -9,78 +7,24 @@ import httpx
 import orjson
 from rapidfuzz import fuzz
 
-from cinesub.core.constants import GESTDOWN_API_URL, USER_AGENT
-from cinesub.core.http import SESSION
+from cinesub.core.constants import GESTDOWN_API_URL
 from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import GESTDOWN_LIMITER
 from cinesub.core.utils import (
     normalize_language,
     normalize_language_alpha3,
-    save_subtitle_to_disk,
     score_subtitle_candidate,
 )
+from cinesub.services.base import BaseHttpService
 
 
-class GestdownService:
+class GestdownService(BaseHttpService):
     """Service client for Gestdown public REST API."""
 
     def __init__(self, base_url: str = GESTDOWN_API_URL) -> None:
+        super().__init__(service_name="Gestdown", limiter=GESTDOWN_LIMITER)
         self.base_url = base_url.rstrip("/")
-
-    @property
-    def is_configured(self) -> bool:
-        """Gestdown is a free, public service requiring no API key."""
-        return True
-
-    @property
-    def is_available(self) -> bool:
-        """Check if Gestdown is not currently circuit-broken due to connection outage."""
-        return GESTDOWN_LIMITER.is_available
-
-    def _headers(self) -> dict[str, str]:
-        return {
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json",
-        }
-
-    def _send_request(
-        self,
-        method: str,
-        url: str,
-        params: dict[str, Any] | None = None,
-        max_retries: int = 3,
-    ) -> httpx.Response:
-        """Send HTTP request with token-bucket rate limiting and 429 backoff."""
-        for attempt in range(max_retries):
-            GESTDOWN_LIMITER.acquire()
-            try:
-                response = SESSION.request(
-                    method=method,
-                    url=url,
-                    params=params,
-                    headers=self._headers(),
-                )
-                if response.status_code == 429:
-                    retry_after = response.headers.get("retry-after")
-                    wait_sec = float(retry_after) if retry_after and retry_after.isdigit() else 5.0
-                    LOG.warning(f"Gestdown 429 rate limit received. Pausing for {wait_sec:.1f}s.")
-                    GESTDOWN_LIMITER.trigger_cooldown(wait_sec)
-                    continue
-
-                return response
-            except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
-                GESTDOWN_LIMITER.mark_unreachable(60.0)
-                LOG.warning(f"Gestdown server unreachable ({exc}). Skipping for 60s.")
-                raise
-            except httpx.RequestError as exc:
-                if attempt == max_retries - 1:
-                    raise
-                backoff_delay = 0.5 * (2**attempt)
-                LOG.debug(f"Gestdown network error ({exc}), retrying in {backoff_delay:.1f}s...")
-                time.sleep(backoff_delay)
-
-        raise RuntimeError("Gestdown request failed after retries.")
 
     def _to_alpha3(self, language_code: str) -> str:
         """Convert 2-letter or arbitrary language code to ISO 639-2/3 alpha3."""
@@ -209,16 +153,3 @@ class GestdownService:
 
         matches.sort(key=lambda match_item: match_item.score, reverse=True)
         return matches
-
-    def download(self, subtitle: SubtitleMatch, destination: Path) -> Path:
-        """Download subtitle from Gestdown, normalize to UTF-8 SRT, and write atomically."""
-        if not subtitle.download_url:
-            raise ValueError("Gestdown match missing download URL.")
-
-        response = self._send_request("GET", subtitle.download_url)
-        if response.status_code != 200:
-            status = response.status_code
-            snippet = response.text[:100]
-            raise RuntimeError(f"Gestdown download failed with status {status}: {snippet}")
-
-        return save_subtitle_to_disk(response.content, destination)
