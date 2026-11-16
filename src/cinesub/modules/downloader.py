@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+import httpx
 import orjson
 from rich.markup import escape
 
@@ -90,13 +91,15 @@ def get_active_services(provider_filter: str = "all") -> dict[str, Any]:
 
 def save_report_output(report: dict[str, Any], json_path: Path | str) -> Path:
     """Save report as formatted indented JSON or line-delimited JSONL with atomic replace."""
-    out_p = Path(json_path).resolve()
-    out_p.parent.mkdir(parents=True, exist_ok=True)
-    staging_path = out_p.with_name(f".{out_p.name}.{os.getpid()}.tmp")
+    output_path = Path(json_path).resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    staging_path = output_path.with_name(f".{output_path.name}.{os.getpid()}.tmp")
 
     try:
-        if out_p.suffix.lower() == ".jsonl":
-            lines: list[bytes] = [orjson.dumps(r) for r in report.get("results", [])]
+        if output_path.suffix.lower() == ".jsonl":
+            lines: list[bytes] = [
+                orjson.dumps(result_entry) for result_entry in report.get("results", [])
+            ]
             summary_line = orjson.dumps(
                 {
                     "summary": {
@@ -118,14 +121,14 @@ def save_report_output(report: dict[str, Any], json_path: Path | str) -> Path:
         else:
             staging_path.write_bytes(orjson.dumps(report, option=orjson.OPT_INDENT_2))
 
-        staging_path.replace(out_p)
-    except Exception:
+        staging_path.replace(output_path)
+    except OSError:
         if staging_path.exists():
             staging_path.unlink(missing_ok=True)
         raise
 
-    LOG.success(f"Report saved to: [white]{escape(str(out_p))}[/white]")
-    return out_p
+    LOG.success(f"Report saved to: [white]{escape(str(output_path))}[/white]")
+    return output_path
 
 
 def _search_provider_worker(
@@ -142,7 +145,7 @@ def _search_provider_worker(
     try:
         matches = service_instance.search(video_meta, language=target_lang)
         return service_name, matches
-    except Exception as exc:
+    except (httpx.HTTPError, RuntimeError, ValueError, OSError) as exc:
         LOG.debug(f"Provider {service_name.upper()} search error: {exc}")
         return service_name, []
 
@@ -182,7 +185,7 @@ def download_subtitle(
             video_meta = tmdb_svc.enrich_video_metadata(video_meta)
             if video_meta.imdb_id:
                 LOG.debug(f"Resolved IMDb ID via TMDb: {video_meta.imdb_id}")
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, RuntimeError) as exc:
             LOG.debug(f"TMDb enrichment warning: {exc}")
 
     services = get_active_services(provider)
@@ -226,7 +229,6 @@ def download_subtitle(
 
     all_matches.sort(key=lambda m: m.score, reverse=True)
 
-    # 1. Single highest-scoring subtitle mode (default workflow)
     if alternatives <= 1:
         best_match = all_matches[0]
 
@@ -271,7 +273,6 @@ def download_subtitle(
 
         return video_meta, [(best_match, target_srt)]
 
-    # 2. Multiple subtitle alternatives mode (--alternatives > 1)
     selected: list[SubtitleMatch] = []
     seen_releases: set[str] = set()
     selected_ids: set[str] = set()
@@ -423,7 +424,9 @@ def _batch_download_worker(
             downloaded_subtitles=downloaded_pairs,
             status=video_status,
         )
-    except Exception as exc:
+    except (OSError, ValueError, RuntimeError, httpx.HTTPError) as exc:
+        if is_interruption(exc):
+            raise
         LOG.error(f"Failed processing {escape(video_file_path.name)}: {exc}")
         return {
             "video_file": video_file_path.name,
@@ -448,9 +451,8 @@ def download_batch(
     services = get_active_services(provider)
     if not services:
         raise RuntimeError(
-            "No subtitle providers configured. Please add OPENSUBTITLES_API_KEY, "
-            "SUBDL_API_KEY, SUBSOURCE_API_KEY, SUBSRO_API_KEY, or "
-            "BETASERIES_API_KEY to your .env file."
+            f"No subtitle providers available matching filter '{provider}'. "
+            "Please check provider configuration or .env credentials."
         )
 
     start_time = time.perf_counter()
@@ -504,15 +506,15 @@ def download_batch(
                     future_map = {
                         executor.submit(
                             _batch_download_worker,
-                            vf,
+                            video_file,
                             language,
                             alternatives,
                             provider,
                             force,
                             use_lang_suffix,
                             dry_run,
-                        ): vf
-                        for vf in video_files
+                        ): video_file
+                        for video_file in video_files
                     }
                     for future in as_completed(future_map):
                         wait_if_paused()

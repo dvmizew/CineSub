@@ -51,11 +51,9 @@ class RateLimiter:
         while True:
             with self.lock:
                 now = time.monotonic()
-                # If currently under 429 cooldown
                 if now < self.cooldown_until:
                     sleep_time = self.cooldown_until - now
                 else:
-                    # Replenish tokens
                     elapsed = now - self.last_update
                     self.last_update = now
                     self.tokens = min(self.capacity, self.tokens + (elapsed * self.rate))
@@ -64,7 +62,6 @@ class RateLimiter:
                         self.tokens -= 1.0
                         return
 
-                    # Compute wait duration for 1 token
                     needed = 1.0 - self.tokens
                     sleep_time = needed / self.rate
 

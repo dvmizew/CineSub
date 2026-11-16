@@ -63,16 +63,16 @@ class SubsRoService(BaseHttpService):
         target_lang = normalize_language(language)
 
         try:
-            resp = self._send_request("GET", search_url)
-            if resp.status_code != 200:
+            response = self._send_request("GET", search_url)
+            if response.status_code != 200:
                 return []
 
-            response_payload = orjson.loads(resp.content)
+            response_payload = orjson.loads(response.content)
             subtitles_list = response_payload.get("items", [])
             if not isinstance(subtitles_list, list):
                 return []
 
-            results: list[SubtitleMatch] = []
+            subtitle_matches: list[SubtitleMatch] = []
             for sub_entry in subtitles_list:
                 raw_lang = str(sub_entry.get("language") or "ro")
                 entry_lang = normalize_language(raw_lang)
@@ -101,7 +101,7 @@ class SubsRoService(BaseHttpService):
                 if "retail" in translator.lower() or "retail" in release_title.lower():
                     score += 5.0
 
-                results.append(
+                subtitle_matches.append(
                     SubtitleMatch(
                         id=sub_id,
                         provider="subsro",
@@ -114,8 +114,8 @@ class SubsRoService(BaseHttpService):
                     )
                 )
 
-            results.sort(key=lambda m: m.score, reverse=True)
-            return results
+            subtitle_matches.sort(key=lambda m: m.score, reverse=True)
+            return subtitle_matches
 
         except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"Subs.ro search error for {video_meta.title}: {exc}")

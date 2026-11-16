@@ -81,16 +81,16 @@ class TmdbService(BaseHttpService):
             params["primary_release_year"] = year
 
         try:
-            resp = self._send_request("GET", "search/movie", params=params)
-            if resp.status_code != 200:
+            response = self._send_request("GET", "search/movie", params=params)
+            if response.status_code != 200:
                 return None
 
-            response_payload = orjson.loads(resp.content)
-            results = response_payload.get("results", [])
-            if not results or not isinstance(results, list):
+            response_payload = orjson.loads(response.content)
+            movie_results = response_payload.get("results", [])
+            if not movie_results or not isinstance(movie_results, list):
                 return None
 
-            return results[0]
+            return movie_results[0]
         except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"TMDb movie search error: {exc}")
             return None
@@ -105,16 +105,16 @@ class TmdbService(BaseHttpService):
             params["first_air_date_year"] = year
 
         try:
-            resp = self._send_request("GET", "search/tv", params=params)
-            if resp.status_code != 200:
+            response = self._send_request("GET", "search/tv", params=params)
+            if response.status_code != 200:
                 return None
 
-            response_payload = orjson.loads(resp.content)
-            results = response_payload.get("results", [])
-            if not results or not isinstance(results, list):
+            response_payload = orjson.loads(response.content)
+            tv_results = response_payload.get("results", [])
+            if not tv_results or not isinstance(tv_results, list):
                 return None
 
-            return results[0]
+            return tv_results[0]
         except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"TMDb TV search error: {exc}")
             return None
@@ -126,10 +126,10 @@ class TmdbService(BaseHttpService):
 
         endpoint = f"tv/{media_id}/external_ids" if is_tv else f"movie/{media_id}/external_ids"
         try:
-            resp = self._send_request("GET", endpoint)
-            if resp.status_code != 200:
+            response = self._send_request("GET", endpoint)
+            if response.status_code != 200:
                 return {}
-            return orjson.loads(resp.content)
+            return orjson.loads(response.content)
         except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"TMDb external IDs error: {exc}")
             return {}
@@ -172,12 +172,12 @@ class TmdbService(BaseHttpService):
             "favorite": bool(favorite),
         }
         try:
-            resp = self._send_request(
+            response = self._send_request(
                 "POST",
                 f"account/{target_account}/favorite",
                 content=orjson.dumps(payload),
             )
-            return resp.status_code in (200, 201)
+            return response.status_code in (200, 201)
         except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.error(f"Failed adding media {media_id} to TMDb favorites: {exc}")
             return False
@@ -197,12 +197,12 @@ class TmdbService(BaseHttpService):
             "watchlist": bool(watchlist),
         }
         try:
-            resp = self._send_request(
+            response = self._send_request(
                 "POST",
                 f"account/{target_account}/watchlist",
                 content=orjson.dumps(payload),
             )
-            return resp.status_code in (200, 201)
+            return response.status_code in (200, 201)
         except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.error(f"Failed adding media {media_id} to TMDb watchlist: {exc}")
             return False

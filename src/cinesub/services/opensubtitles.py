@@ -21,18 +21,26 @@ class OpenSubtitlesService(BaseHttpService):
     def __init__(self, api_key: str | None = None) -> None:
         super().__init__(service_name="OpenSubtitles", limiter=OPENSUBTITLES_LIMITER)
         self.api_key = api_key or os.getenv("OPENSUBTITLES_API_KEY", "").strip() or None
+        self.user_token = (
+            os.getenv("OPENSUBTITLES_USER_TOKEN", "").strip()
+            or os.getenv("OPENSUBTITLES_TOKEN", "").strip()
+            or None
+        )
 
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
     def _headers(self) -> dict[str, str]:
-        return {
+        headers = {
             "Api-Key": self.api_key or "",
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
+        if self.user_token:
+            headers["Authorization"] = f"Bearer {self.user_token}"
+        return headers
 
     def search(self, video_meta: VideoMetadata, language: str) -> list[SubtitleMatch]:
         """Search OpenSubtitles by moviehash first, then fallback to text query."""
@@ -50,10 +58,10 @@ class OpenSubtitlesService(BaseHttpService):
                     language=language,
                     matched_by_hash=True,
                 )
-                for m in hash_matches:
-                    if m.file_id not in seen_file_ids:
-                        seen_file_ids.add(m.file_id)
-                        matches.append(m)
+                for subtitle_match in hash_matches:
+                    if subtitle_match.file_id not in seen_file_ids:
+                        seen_file_ids.add(subtitle_match.file_id)
+                        matches.append(subtitle_match)
             except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
                 LOG.debug(f"OpenSubtitles hash search error: {exc}")
 
@@ -81,10 +89,10 @@ class OpenSubtitlesService(BaseHttpService):
                 language=language,
                 matched_by_hash=False,
             )
-            for m in query_matches:
-                if m.file_id not in seen_file_ids:
-                    seen_file_ids.add(m.file_id)
-                    matches.append(m)
+            for subtitle_match in query_matches:
+                if subtitle_match.file_id not in seen_file_ids:
+                    seen_file_ids.add(subtitle_match.file_id)
+                    matches.append(subtitle_match)
         except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"OpenSubtitles query search error: {exc}")
 
@@ -99,25 +107,27 @@ class OpenSubtitlesService(BaseHttpService):
         matched_by_hash: bool,
     ) -> list[SubtitleMatch]:
         url = f"{OPENSUBTITLES_API_URL}/subtitles"
-        resp = self._send_request("GET", url, params=params)
-        if resp.status_code != 200:
+        response = self._send_request("GET", url, params=params)
+        if response.status_code != 200:
             return []
 
-        response_payload = orjson.loads(resp.content)
-        results: list[SubtitleMatch] = []
+        response_payload = orjson.loads(response.content)
+        subtitle_matches: list[SubtitleMatch] = []
 
         for candidate_entry in response_payload.get("data", []):
-            attr = candidate_entry.get("attributes", {})
-            files = attr.get("files", [])
+            candidate_attributes = candidate_entry.get("attributes", {})
+            files = candidate_attributes.get("files", [])
             if not files:
                 continue
 
             file_id = files[0].get("file_id")
-            release_name = attr.get("release") or files[0].get("file_name") or video_meta.title
-            rating = attr.get("ratings")
-            downloads = attr.get("download_count")
-            hi = bool(attr.get("hearing_impaired", False))
-            fps = attr.get("fps")
+            release_name = (
+                candidate_attributes.get("release") or files[0].get("file_name") or video_meta.title
+            )
+            rating = candidate_attributes.get("ratings")
+            downloads = candidate_attributes.get("download_count")
+            hearing_impaired = bool(candidate_attributes.get("hearing_impaired", False))
+            fps = candidate_attributes.get("fps")
 
             score = score_subtitle_candidate(
                 video_meta=video_meta,
@@ -126,22 +136,22 @@ class OpenSubtitlesService(BaseHttpService):
                 downloads=downloads,
             )
 
-            results.append(
+            subtitle_matches.append(
                 SubtitleMatch(
                     id=str(candidate_entry.get("id", file_id)),
                     provider="opensubtitles",
-                    language=attr.get("language", language),
+                    language=candidate_attributes.get("language", language),
                     release_name=release_name,
                     matched_by_hash=matched_by_hash,
                     file_id=file_id,
                     rating=float(rating) if rating is not None else None,
                     download_count=downloads,
-                    hearing_impaired=hi,
+                    hearing_impaired=hearing_impaired,
                     fps=fps,
                     score=score,
                 )
             )
-        return results
+        return subtitle_matches
 
     def download(self, subtitle: SubtitleMatch, destination: Path) -> Path:
         """Download subtitle from OpenSubtitles and normalize encoding to UTF-8."""
@@ -151,26 +161,32 @@ class OpenSubtitlesService(BaseHttpService):
         ticket_url = f"{OPENSUBTITLES_API_URL}/download"
         payload = {"file_id": int(subtitle.file_id)}
 
-        ticket_resp = self._send_request(
+        ticket_response = self._send_request(
             "POST",
             ticket_url,
             content=orjson.dumps(payload),
         )
-        if ticket_resp.status_code == 406:
+        if ticket_response.status_code == 406:
             try:
-                msg = orjson.loads(ticket_resp.content).get("message", "Download quota exceeded")
+                msg = orjson.loads(ticket_response.content).get(
+                    "message", "Download quota exceeded"
+                )
             except orjson.JSONDecodeError:
                 msg = "Download quota exceeded"
             raise RuntimeError(f"OpenSubtitles download quota exhausted: {msg}")
 
-        ticket_resp.raise_for_status()
+        ticket_response.raise_for_status()
 
-        ticket_payload = orjson.loads(ticket_resp.content)
+        ticket_payload = orjson.loads(ticket_response.content)
         download_url = ticket_payload.get("link")
         if not download_url:
             raise RuntimeError("OpenSubtitles returned no download link.")
 
-        file_resp = self._send_request("GET", download_url)
-        file_resp.raise_for_status()
+        download_headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "*/*",
+        }
+        file_response = self._send_request("GET", download_url, headers=download_headers)
+        file_response.raise_for_status()
 
-        return save_subtitle_to_disk(file_resp.content, destination)
+        return save_subtitle_to_disk(file_response.content, destination)

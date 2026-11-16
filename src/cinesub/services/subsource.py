@@ -102,21 +102,21 @@ class SubsourceService(BaseHttpService):
                 "lang": language.lower(),
             }
             if video_meta.is_episode:
-                if video_meta.season:
+                if video_meta.season is not None:
                     subs_params["season"] = video_meta.season
-                if video_meta.episode:
+                if video_meta.episode is not None:
                     subs_params["episode"] = video_meta.episode
 
-            subs_resp = self._send_request("GET", subs_url, params=subs_params)
-            if subs_resp.status_code != 200:
+            subs_response = self._send_request("GET", subs_url, params=subs_params)
+            if subs_response.status_code != 200:
                 return []
 
-            subtitles_payload = orjson.loads(subs_resp.content)
+            subtitles_payload = orjson.loads(subs_response.content)
             raw_subtitles = subtitles_payload.get("data", [])
             if not isinstance(raw_subtitles, list):
                 return []
 
-            results: list[SubtitleMatch] = []
+            subtitle_matches: list[SubtitleMatch] = []
             for idx, candidate_entry in enumerate(raw_subtitles):
                 sub_id = str(candidate_entry.get("id") or f"subsource_{idx}")
                 release_name = (
@@ -146,7 +146,7 @@ class SubsourceService(BaseHttpService):
                     downloads=downloads,
                 )
 
-                results.append(
+                subtitle_matches.append(
                     SubtitleMatch(
                         id=sub_id,
                         provider="subsource",
@@ -163,8 +163,8 @@ class SubsourceService(BaseHttpService):
                     )
                 )
 
-            results.sort(key=lambda match: match.score, reverse=True)
-            return results
+            subtitle_matches.sort(key=lambda match: match.score, reverse=True)
+            return subtitle_matches
 
         except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"SubSource search error: {exc}")

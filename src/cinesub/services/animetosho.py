@@ -80,7 +80,7 @@ class AnimeToshoService(BaseHttpService):
             if not release_id or not release_title:
                 continue
 
-            # Query detail endpoint to inspect attachments
+            # Feed items omit attachment metadata, requiring secondary detail query
             try:
                 detail_response = self._send_request(
                     "GET",

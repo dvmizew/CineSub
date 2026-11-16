@@ -45,17 +45,19 @@ class SubdlService(BaseHttpService):
             "file_name": video_meta.file_path.name,
             "languages": language.upper(),
             "releases": 1,
-            "hi": 1,
+            "subs_per_page": 30,
         }
 
         if video_meta.imdb_id:
             params["imdb_id"] = video_meta.imdb_id
+        if video_meta.tmdb_id:
+            params["tmdb_id"] = video_meta.tmdb_id
 
         if video_meta.is_episode:
             params["type"] = "tv"
-            if video_meta.season:
+            if video_meta.season is not None:
                 params["season_number"] = video_meta.season
-            if video_meta.episode:
+            if video_meta.episode is not None:
                 params["episode_number"] = video_meta.episode
         else:
             params["type"] = "movie"
@@ -63,15 +65,15 @@ class SubdlService(BaseHttpService):
                 params["year"] = video_meta.year
 
         try:
-            resp = self._send_request("GET", url, params=params)
-            if resp.status_code != 200:
+            response = self._send_request("GET", url, params=params)
+            if response.status_code != 200:
                 return []
 
-            response_payload = orjson.loads(resp.content)
+            response_payload = orjson.loads(response.content)
             if not response_payload.get("status"):
                 return []
 
-            results: list[SubtitleMatch] = []
+            matches: list[SubtitleMatch] = []
             for idx, candidate_entry in enumerate(response_payload.get("subtitles", [])):
                 release_name = (
                     candidate_entry.get("release_name")
@@ -93,7 +95,7 @@ class SubdlService(BaseHttpService):
                 sub_id = str(
                     candidate_entry.get("id") or candidate_entry.get("file_n_id") or f"subdl_{idx}"
                 )
-                results.append(
+                matches.append(
                     SubtitleMatch(
                         id=sub_id,
                         provider="subdl",
@@ -108,8 +110,8 @@ class SubdlService(BaseHttpService):
                     )
                 )
 
-            results.sort(key=lambda match: match.score, reverse=True)
-            return results
+            matches.sort(key=lambda match: match.score, reverse=True)
+            return matches
 
         except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"SubDL search error: {exc}")
@@ -121,7 +123,7 @@ class SubdlService(BaseHttpService):
             raise ValueError("SubDL match missing download URL.")
 
         download_params = {"api_key": self.api_key} if self.api_key else None
-        resp = self._send_request("GET", subtitle.download_url, params=download_params)
-        resp.raise_for_status()
+        response = self._send_request("GET", subtitle.download_url, params=download_params)
+        response.raise_for_status()
 
-        return save_subtitle_to_disk(resp.content, destination)
+        return save_subtitle_to_disk(response.content, destination)

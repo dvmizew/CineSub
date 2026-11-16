@@ -58,14 +58,13 @@ def test_cli_sync(sample_video_file: Path, capsys) -> None:
         assert "Inception" in captured.out
         assert "95.0" in captured.out
 
-        # Verify backward-compatible 'sync' alias
         app(["sync", str(sample_video_file), "-l", "en"])
         captured_alias = capsys.readouterr()
         assert "Subtitle Download Complete" in captured_alias.out
 
 
-def test_cli_sync_json_and_threads(tmp_path: Path, sample_video_file: Path, capsys) -> None:
-    json_out = tmp_path / "sync_report.json"
+def test_cli_download_json_and_threads(tmp_path: Path, sample_video_file: Path, capsys) -> None:
+    json_out = tmp_path / "download_report.json"
     mock_report = {
         "command": "download",
         "total_files": 1,
@@ -87,7 +86,7 @@ def test_cli_sync_json_and_threads(tmp_path: Path, sample_video_file: Path, caps
         assert kwargs["json_path"] == json_out
 
 
-def test_cli_dry_run_sync(sample_video_file: Path, capsys) -> None:
+def test_cli_dry_run_download(sample_video_file: Path, capsys) -> None:
     mock_report = {
         "command": "download",
         "dry_run": True,
@@ -175,7 +174,7 @@ def test_cli_download_alternatives(sample_video_file: Path, capsys) -> None:
 
 
 def test_save_report_json_and_jsonl(tmp_path: Path) -> None:
-    report_data = {
+    report_payload = {
         "timestamp": "2026-08-31T12:00:00Z",
         "command": "download",
         "dry_run": False,
@@ -193,12 +192,12 @@ def test_save_report_json_and_jsonl(tmp_path: Path) -> None:
     }
 
     json_p = tmp_path / "report.json"
-    save_report_output(report_data, json_p)
+    save_report_output(report_payload, json_p)
     assert json_p.is_file()
     assert b'"command": "download"' in json_p.read_bytes()
 
     jsonl_p = tmp_path / "report.jsonl"
-    save_report_output(report_data, jsonl_p)
+    save_report_output(report_payload, jsonl_p)
     assert jsonl_p.is_file()
     lines = jsonl_p.read_bytes().strip().split(b"\n")
     assert len(lines) == 3
@@ -222,8 +221,8 @@ def test_cli_tmdb_sync(sample_video_file: Path, capsys) -> None:
     mock_tmdb.add_to_watchlist.return_value = True
 
     with patch("cinesub.cli.main.TmdbService", return_value=mock_tmdb):
-        sync_result = app(["tmdb", str(sample_video_file), "--favorite", "--watchlist"])
-        assert sync_result["status"] == "success"
+        tmdb_result = app(["tmdb", str(sample_video_file), "--favorite", "--watchlist"])
+        assert tmdb_result["status"] == "success"
         captured = capsys.readouterr()
         assert "TMDb Media Synchronization" in captured.out
         assert "Inception" in captured.out
@@ -245,8 +244,8 @@ def test_cli_tmdb_bookmark_alias(sample_video_file: Path, capsys) -> None:
     mock_tmdb.add_to_watchlist.return_value = True
 
     with patch("cinesub.cli.main.TmdbService", return_value=mock_tmdb):
-        sync_result = app(["tmdb", str(sample_video_file), "--bookmark"])
-        assert sync_result["status"] == "success"
+        tmdb_result = app(["tmdb", str(sample_video_file), "--bookmark"])
+        assert tmdb_result["status"] == "success"
         mock_tmdb.add_to_watchlist.assert_called_once_with(27205, is_tv=False, watchlist=True)
         captured = capsys.readouterr()
         assert "Bookmarked" in captured.out
@@ -255,7 +254,6 @@ def test_cli_tmdb_bookmark_alias(sample_video_file: Path, capsys) -> None:
 def test_cli_tmdb_folder_mode_and_fallback(tmp_path: Path, capsys) -> None:
     from unittest.mock import MagicMock
 
-    # Create directory with two movie subfolders and NO video files
     library_dir = tmp_path / "Movies"
     library_dir.mkdir()
     (library_dir / "Inception (2010)").mkdir()
@@ -276,9 +274,9 @@ def test_cli_tmdb_folder_mode_and_fallback(tmp_path: Path, capsys) -> None:
     mock_tmdb.add_to_watchlist.return_value = True
 
     with patch("cinesub.cli.main.TmdbService", return_value=mock_tmdb):
-        sync_result = app(["tmdb", str(library_dir), "-b"])
-        assert sync_result["status"] == "success"
-        assert sync_result["total_files"] == 2
+        tmdb_result = app(["tmdb", str(library_dir), "-b"])
+        assert tmdb_result["status"] == "success"
+        assert tmdb_result["total_files"] == 2
         assert mock_tmdb.add_to_watchlist.call_count == 2
         captured = capsys.readouterr()
         assert "Bookmarked" in captured.out
@@ -289,7 +287,6 @@ def test_cli_tmdb_by_folder_flag(tmp_path: Path, capsys) -> None:
 
     movie_dir = tmp_path / "Interstellar (2014)"
     movie_dir.mkdir()
-    # Dummy video file inside with generic name
     (movie_dir / "movie.mkv").write_bytes(b"\x00" * 1024)
 
     mock_tmdb = MagicMock()
@@ -303,9 +300,9 @@ def test_cli_tmdb_by_folder_flag(tmp_path: Path, capsys) -> None:
     mock_tmdb.add_to_watchlist.return_value = True
 
     with patch("cinesub.cli.main.TmdbService", return_value=mock_tmdb):
-        sync_result = app(["tmdb", str(movie_dir), "-F", "-b"])
-        assert sync_result["status"] == "success"
-        assert sync_result["results"][0]["title"] == "Interstellar"
+        tmdb_result = app(["tmdb", str(movie_dir), "-F", "-b"])
+        assert tmdb_result["status"] == "success"
+        assert tmdb_result["results"][0]["title"] == "Interstellar"
         mock_tmdb.search_movie.assert_called_with("Interstellar", 2014)
 
 
@@ -328,9 +325,8 @@ def test_cli_tmdb_deduplication(tmp_path: Path, capsys) -> None:
     mock_tmdb.add_to_watchlist.return_value = True
 
     with patch("cinesub.cli.main.TmdbService", return_value=mock_tmdb):
-        sync_result = app(["tmdb", str(movie_dir), "-b"])
-        assert sync_result["status"] == "success"
-        # add_to_watchlist called once despite 2 video files
+        tmdb_result = app(["tmdb", str(movie_dir), "-b"])
+        assert tmdb_result["status"] == "success"
         mock_tmdb.add_to_watchlist.assert_called_once_with(603, is_tv=False, watchlist=True)
         captured = capsys.readouterr()
         assert "Bookmarked (already)" in captured.out
@@ -360,8 +356,8 @@ def test_cli_extract_command(sample_video_file: Path, capsys) -> None:
     }
 
     with patch("cinesub.cli.main.extract_embedded_subtitles_batch", return_value=mock_report):
-        result = app(["extract", str(sample_video_file), "--language", "ro"])
-        assert result["status"] == "success"
+        cli_result = app(["extract", str(sample_video_file), "--language", "ro"])
+        assert cli_result["status"] == "success"
         captured = capsys.readouterr()
         assert "Embedded Subtitle Extraction Results" in captured.out
         assert "EXTRACTED" in captured.out
@@ -392,8 +388,8 @@ def test_cli_extract_dry_run(sample_video_file: Path, capsys) -> None:
     }
 
     with patch("cinesub.cli.main.extract_embedded_subtitles_batch", return_value=mock_report):
-        result = app(["extract", str(sample_video_file), "--language", "ro", "--dry-run"])
-        assert result["status"] == "success"
+        cli_result = app(["extract", str(sample_video_file), "--language", "ro", "--dry-run"])
+        assert cli_result["status"] == "success"
         captured = capsys.readouterr()
         assert "Extract Dry-Run" in captured.out
         assert "DRY-RUN" in captured.out

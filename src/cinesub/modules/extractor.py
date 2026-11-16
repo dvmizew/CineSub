@@ -141,7 +141,7 @@ def extract_track_to_srt(
         staging_target.write_bytes(normalized_bytes)
         staging_target.replace(target_path)
         return target_path
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError):
         if staging_target.exists():
             staging_target.unlink(missing_ok=True)
         raise
@@ -227,7 +227,7 @@ def extract_video_embedded_subtitles(
                     "message": "Extracted & UTF-8 Normalized",
                 }
             )
-        except Exception as exc:
+        except (subprocess.SubprocessError, OSError, ValueError) as exc:
             extracted_results.append(
                 {
                     "video_file": path.name,
@@ -289,10 +289,10 @@ def extract_embedded_subtitles_batch(
             )
             with interactive_pause_listener(progress, task):
                 try:
-                    for vf in video_files:
+                    for video_file in video_files:
                         wait_if_paused()
                         file_extracted = extract_video_embedded_subtitles(
-                            video_path=vf,
+                            video_path=video_file,
                             language=language,
                             force=force,
                             dry_run=dry_run,
@@ -309,10 +309,16 @@ def extract_embedded_subtitles_batch(
                     )
 
     duration = time.time() - start_time
-    successful = sum(1 for r in all_results if r.get("status") == "success")
-    dry_run_count = sum(1 for r in all_results if r.get("status") == "dry_run")
-    skipped = sum(1 for r in all_results if r.get("status") == "skipped")
-    failed = sum(1 for r in all_results if r.get("status") in ("failed", "unsupported_codec"))
+    successful = sum(1 for track_result in all_results if track_result.get("status") == "success")
+    dry_run_count = sum(
+        1 for track_result in all_results if track_result.get("status") == "dry_run"
+    )
+    skipped = sum(1 for track_result in all_results if track_result.get("status") == "skipped")
+    failed = sum(
+        1
+        for track_result in all_results
+        if track_result.get("status") in ("failed", "unsupported_codec")
+    )
 
     return {
         "status": "success",

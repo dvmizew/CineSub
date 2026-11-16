@@ -4,9 +4,11 @@ import contextlib
 import os
 import shutil
 import signal
+import subprocess
 from pathlib import Path
 from typing import Annotated, Any
 
+import httpx
 from cyclopts import App, Parameter
 from dotenv import load_dotenv
 from rich.markup import escape
@@ -34,6 +36,9 @@ from cinesub.modules.extractor import extract_embedded_subtitles_batch
 from cinesub.services.tmdb import TmdbService
 
 load_dotenv()
+_user_home_env = Path.home() / ".env"
+if _user_home_env.is_file():
+    load_dotenv(dotenv_path=_user_home_env)
 
 if hasattr(signal, "SIGCONT"):
     with contextlib.suppress(ValueError, OSError):
@@ -74,26 +79,27 @@ def _render_stats_card(
     )
     action_label = "Dry-Run Matches" if is_dry_run else "Downloaded"
     action_count = dry_run if is_dry_run else success
-    action_val = f"{action_count} ({match_pct:.1f}%)"
+    action_metric_text = f"{action_count} ({match_pct:.1f}%)"
     action_color = "yellow" if is_dry_run else "green"
 
+    action_cell = f"[dim]{action_label}[/dim]\n[bold {action_color}]{action_metric_text}[/]"
     speed_text = f"{throughput:.1f} files/s ({duration:.1f}s)"
     stats_grid.add_row(
         f"[dim]Total Scanned[/dim]\n[bold white]{total} media files[/bold white]",
-        f"[dim]{action_label}[/dim]\n[bold {action_color}]{action_val}[/bold {action_color}]",
+        action_cell,
         f"[dim]Skipped / Failed[/dim]\n[bold white]{skipped} skip / {failed} fail[/bold white]",
         f"[dim]Throughput / Time[/dim]\n[bold cyan]{speed_text}[/bold cyan]",
     )
 
     border_color = "yellow" if is_dry_run else "green"
-    card = Panel(
+    stats_panel = Panel(
         stats_grid,
         title=f"[bold {border_color}]{title}[/bold {border_color}]",
         border_style=border_color,
         padding=(1, 2),
     )
     CONSOLE.print()
-    CONSOLE.print(card)
+    CONSOLE.print(stats_panel)
     CONSOLE.print()
 
 
@@ -118,7 +124,7 @@ def download(
         int,
         Parameter(
             name=["--alternatives", "-a", "-n"],
-            help="Number of subtitle alternatives to download per video (default: 1).",
+            help="Number of subtitle alternatives to download per video.",
         ),
     ] = 1,
     provider: Annotated[
@@ -190,13 +196,17 @@ def download(
             dry_run=dry_run,
         )
 
-        results = report.get("results", [])
-        total_files = report.get("total_files", len(results))
+        download_results = report.get("results", [])
+        total_files = report.get("total_files", len(download_results))
         duration = float(report.get("duration_seconds", 0.0))
         throughput = float(report.get("throughput_files_per_sec", 0.0))
 
-        if len(results) == 1 and results[0].get("status") in ("success", "skipped", "dry_run"):
-            single_result = results[0]
+        if len(download_results) == 1 and download_results[0].get("status") in (
+            "success",
+            "skipped",
+            "dry_run",
+        ):
+            single_result = download_results[0]
             file_status = single_result.get("status")
 
             if alternatives > 1:
@@ -313,7 +323,7 @@ def download(
                 table.add_column("Provider", style="cyan")
                 table.add_column("Score / Details", style="green")
 
-            for result_entry in results:
+            for result_entry in download_results:
                 file_status = result_entry.get("status")
                 video_name = escape(str(result_entry.get("video_file") or ""))
                 if alternatives > 1:
@@ -376,7 +386,7 @@ def download(
             raise
         LOG.warning("\n⏹️  [bold yellow]INTERRUPTED[/] - Download stopped by user (Ctrl+C).")
         return {"status": "interrupted"}
-    except Exception as exc:
+    except (ValueError, OSError, httpx.HTTPError) as exc:
         LOG.error(str(exc))
         return {"status": "error", "error": str(exc)}
 
@@ -392,6 +402,7 @@ def _mask_secret(value: str) -> str:
 
 @app.command
 def config() -> None:
+    """Display environment configuration, active API credentials, rate limits, and tool status."""
     os_key = os.getenv("OPENSUBTITLES_API_KEY", "").strip()
     subdl_key = os.getenv("SUBDL_API_KEY", "").strip()
     subsource_key = os.getenv("SUBSOURCE_API_KEY", "").strip()
@@ -550,7 +561,7 @@ def extract(
             dry_run=dry_run,
         )
 
-        results = report.get("results", [])
+        extraction_results = report.get("results", [])
         total_files = report.get("total_files", 0)
         duration = float(report.get("duration_seconds", 0.0))
 
@@ -581,8 +592,8 @@ def extract(
         table.add_column("Status", justify="center")
         table.add_column("Output File / Details", style="green")
 
-        for entry in results:
-            entry_status = entry.get("status")
+        for stream_entry in extraction_results:
+            entry_status = stream_entry.get("status")
             if entry_status == "success":
                 status_display = "[bold green]EXTRACTED[/bold green]"
             elif entry_status == "dry_run":
@@ -592,15 +603,15 @@ def extract(
             else:
                 status_display = "[bold red]FAILED[/bold red]"
 
-            output_detail = Path(entry.get("target_path", "")).name
+            output_detail = Path(stream_entry.get("target_path", "")).name
             if entry_status not in ("success", "dry_run"):
-                output_detail = f"{output_detail} ({entry.get('message', '')})"
+                output_detail = f"{output_detail} ({stream_entry.get('message', '')})"
 
             table.add_row(
-                escape(str(entry.get("video_file") or "")),
-                str(entry.get("stream_index")),
-                entry.get("codec"),
-                entry.get("language", "").upper(),
+                escape(str(stream_entry.get("video_file") or "")),
+                str(stream_entry.get("stream_index")),
+                stream_entry.get("codec"),
+                stream_entry.get("language", "").upper(),
                 status_display,
                 escape(output_detail),
             )
@@ -616,7 +627,7 @@ def extract(
             "\n⏹️  [bold yellow]INTERRUPTED[/] - Subtitle extraction stopped by user (Ctrl+C)."
         )
         return {"status": "interrupted"}
-    except Exception as exc:
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
         LOG.error(str(exc))
         return {"status": "error", "error": str(exc)}
 

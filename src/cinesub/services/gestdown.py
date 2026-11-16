@@ -42,7 +42,6 @@ class GestdownService(BaseHttpService):
         target_lang = normalize_language(language)
         lang_alpha3 = self._to_alpha3(target_lang)
 
-        # 1. Search show catalog
         clean_show_title = video_meta.title.strip()
         search_url = f"{self.base_url}/shows/search/{quote(clean_show_title)}"
         try:
@@ -58,7 +57,6 @@ class GestdownService(BaseHttpService):
         if not shows_list:
             return []
 
-        # Find best matching show by TMDb ID, exact title, or high fuzzy similarity
         selected_show: dict[str, Any] | None = None
         best_ratio = 0.0
 
@@ -91,7 +89,6 @@ class GestdownService(BaseHttpService):
         if not show_id:
             return []
 
-        # 2. Retrieve subtitles for target episode and language
         season_num = video_meta.season
         ep_num = video_meta.episode
         subtitles_url = (

@@ -6,7 +6,7 @@ Automated subtitle downloader and media library management CLI for movies and TV
 
 CineSub searches across 9 subtitle providers, matches releases using 64-bit video hashes (`OSHash`) or TMDb-enriched metadata, validates timing against video duration, and downloads clean, UTF-8 normalized `.srt` companion subtitles for Plex, Emby, and Jellyfin.
 
-- **Zero False Positives**: Prioritizes exact 64-bit video checksums over filenames.
+- **Hash-First Precision**: Prioritizes exact 64-bit video checksums (`OSHash`) before falling back to filename metadata matching.
 - **9 Providers**: OpenSubtitles, SubDL, SubSource, Subs.ro, BetaSeries, Gestdown, BSPlayer, AnimeTosho, and Assrt.
 - **Plex / Emby Ready**: Language tags (`movie.ro.srt`), atomic POSIX file writes, and NAS directory pruning.
 - **Embedded Stream Extraction**: Extracts embedded tracks from `.mkv` and `.mp4` without re-encoding.
@@ -127,7 +127,7 @@ Video File ──► [ 1. 64-bit OSHash ] ──► Exact Hash Match? ───�
 
 1. **Exact 64-Bit Hash Matching**: Reads the first and last 64 KB of the video file (`OSHash`). If a provider has a matching hash, subtitle synchronization is guaranteed without relying on messy filenames.
 2. **Metadata Fallback & TMDb Enrichment**: If no hash matches, CineSub extracts media details (`guessit`), enriches IMDb/TMDb IDs, and scores candidate releases using release group clusters and token boundaries (`rapidfuzz`).
-3. **Timing Invariants & Atomic Writes**: Validates the subtitle's maximum timestamp against video duration to eliminate cross-movie collisions. Subtitles are written atomically (`.<name>.tmp` $\to$ `os.replace`) to prevent media server scan glitches.
+3. **Timing Invariants & Atomic Writes**: Validates the subtitle's maximum timestamp against video duration to eliminate cross-movie collisions. Subtitles are written atomically (`.<name>.tmp` → `os.replace`) to prevent media server scan glitches.
 4. **Token-Bucket Rate Limiting**: Synchronized per-provider rate limiters prevent HTTP 429 bans during large multi-threaded batch jobs.
 
 ---
@@ -136,7 +136,7 @@ Video File ──► [ 1. 64-bit OSHash ] ──► Exact Hash Match? ───�
 
 ### 1. `cinesub download` (alias: `sync`)
 
-Finds and saves matching subtitles for your video files (`movie.mp4` $\to$ `movie.srt`). By default, downloads the single highest-scoring subtitle. With `-a` / `--alternatives`, downloads multiple ranked alternatives for comparison (`movie_1_provider.srt`, `movie_2_provider.srt`).
+Finds and saves matching subtitles for your video files (`movie.mp4` → `movie.srt`). By default, downloads the single highest-scoring subtitle. With `-a` / `--alternatives`, downloads multiple ranked alternatives for comparison (`movie_1_provider.srt`, `movie_2_provider.srt`).
 
 ```bash
 # Download best subtitle using default language (en, or CINESUB_DEFAULT_LANGUAGE from .env)
@@ -205,6 +205,7 @@ cinesub extract "/media/Movies" -l ro -f
 ```
 
 **Key Flags:**
+- `PATH`: Path to a video file or directory containing video files.
 - `-l, --language`: Target language code (e.g. `ro`, `en`) or `all`. Default: `all`.
 - `-f, --force`: Overwrite existing companion `.srt` files on disk.
 - `-d, --dry-run`: Inspect streams without writing files.
@@ -234,10 +235,12 @@ cinesub tmdb "/media/Movies" -b --dry-run
 ```
 
 **Key Flags:**
+- `PATH`: Path to a video file or directory containing video files.
 - `-b, --bookmark` / `-w, --watchlist`: Add matched media to your TMDb Watchlist.
 - `-f, --favorite`: Add matched media to your TMDb Favorites list.
 - `-F, --by-folder`: Search TMDb using folder names instead of filenames.
 - `-d, --dry-run`: Simulate search without modifying TMDb account lists.
+- `--verbose`: Enable debug logging.
 
 ---
 

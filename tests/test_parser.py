@@ -38,11 +38,11 @@ def test_normalize_language() -> None:
 
 
 def test_decode_and_normalize_subtitle_content() -> None:
-    bom_data = (
+    bom_encoded_bytes = (
         b"\xef\xbb\xbf5\n00:00:01,000 --> 00:00:04,000\nSalut lume!\n\n"
         b"9\n00:00:05,000 --> 00:00:08,000\nA doua linie\n"
     )
-    normalized = decode_and_normalize_subtitle_content(bom_data)
+    normalized = decode_and_normalize_subtitle_content(bom_encoded_bytes)
     assert not normalized.startswith(b"\xef\xbb\xbf")
     decoded_str = normalized.decode("utf-8")
     assert "Salut lume!" in decoded_str
@@ -52,19 +52,19 @@ def test_decode_and_normalize_subtitle_content() -> None:
     text_ro = (
         "1\n00:00:01,000 --> 00:00:04,000\nAcesta este un text cu diacritice: ş, ţ, ă, î, â.\n"
     )
-    cp1250_data = text_ro.encode("cp1250")
-    normalized_cp1250 = decode_and_normalize_subtitle_content(cp1250_data)
+    cp1250_encoded_bytes = text_ro.encode("cp1250")
+    normalized_cp1250 = decode_and_normalize_subtitle_content(cp1250_encoded_bytes)
     assert "diacritice" in normalized_cp1250.decode("utf-8")
 
     # ISO-8859-2 (Latin-2) encoding
-    iso_8859_2_data = text_ro.encode("iso-8859-2")
-    normalized_iso = decode_and_normalize_subtitle_content(iso_8859_2_data)
+    iso_8859_2_encoded_bytes = text_ro.encode("iso-8859-2")
+    normalized_iso = decode_and_normalize_subtitle_content(iso_8859_2_encoded_bytes)
     assert "diacritice" in normalized_iso.decode("utf-8")
 
     # Windows-1252 (CP1252) Western European encoding
     text_western = "1\n00:00:01,000 --> 00:00:04,000\nCafé français avec résumé et naïve.\n"
-    cp1252_data = text_western.encode("windows-1252")
-    normalized_cp1252 = decode_and_normalize_subtitle_content(cp1252_data)
+    cp1252_encoded_bytes = text_western.encode("windows-1252")
+    normalized_cp1252 = decode_and_normalize_subtitle_content(cp1252_encoded_bytes)
     assert "français" in normalized_cp1252.decode("utf-8")
 
     # Corrupt / Non-standard SRT structure fallback
@@ -76,8 +76,8 @@ def test_decode_and_normalize_subtitle_content() -> None:
         "1\n00:00:01,000 --> 00:00:04,000\nПривет, это тестовая субтитра для фильма.\n\n"
         "2\n00:00:05,000 --> 00:00:08,000\nВторая строка с русским текстом.\n"
     )
-    cp1251_data = text_cyrillic.encode("cp1251")
-    normalized_cyrillic = decode_and_normalize_subtitle_content(cp1251_data)
+    cp1251_encoded_bytes = text_cyrillic.encode("cp1251")
+    normalized_cyrillic = decode_and_normalize_subtitle_content(cp1251_encoded_bytes)
     assert "Привет, это тестовая субтитра" in normalized_cyrillic.decode("utf-8")
 
     assert decode_and_normalize_subtitle_content(b"") == b""
@@ -176,9 +176,9 @@ def test_all_video_container_extensions_accepted(tmp_path: Path) -> None:
     created_files = []
     for ext in SUPPORTED_VIDEO_EXTS:
         clean_ext = ext.lstrip(".")
-        f = tmp_path / f"Sample_Movie_{clean_ext}{ext}"
-        f.write_bytes(b"\x00" * 1024)
-        created_files.append(f)
+        sample_video_path = tmp_path / f"Sample_Movie_{clean_ext}{ext}"
+        sample_video_path.write_bytes(b"\x00" * 1024)
+        created_files.append(sample_video_path)
 
     found = find_video_files(tmp_path)
     assert len(found) == len(SUPPORTED_VIDEO_EXTS)
@@ -224,15 +224,12 @@ def test_parse_video_metadata_parent_fallback(tmp_path: Path) -> None:
 
 
 def test_extract_best_subtitle_from_archive() -> None:
-    # 1. Non-zip payload pass-through
     raw_text = b"1\n00:00:01,000 --> 00:00:02,000\nPlain SRT\n"
     assert extract_best_subtitle_from_archive(raw_text, "movie") == raw_text
 
-    # 2. Empty payload raises ValueError
     with pytest.raises(ValueError, match="Archive payload is empty"):
         extract_best_subtitle_from_archive(b"", "movie")
 
-    # 3. Zip with multiple files, picking best match stem and ignoring hidden files
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, "w") as zf:
         zf.writestr(".DS_Store", b"junk")
@@ -244,7 +241,6 @@ def test_extract_best_subtitle_from_archive() -> None:
     extracted = extract_best_subtitle_from_archive(zip_bytes, "Target.Movie.1080p")
     assert b"Target" in extracted
 
-    # 4. Zip without valid subtitle extensions raises ValueError
     empty_zip_buf = io.BytesIO()
     with zipfile.ZipFile(empty_zip_buf, "w") as zf:
         zf.writestr("readme.txt", b"instructions")
@@ -283,7 +279,7 @@ def test_atomic_write_file(tmp_path: Path) -> None:
 
 
 def test_convert_ass_to_srt_bytes() -> None:
-    ass_data = (
+    ass_content_bytes = (
         b"[Script Info]\n"
         b"Title: Sample ASS\n"
         b"[Events]\n"
@@ -291,7 +287,7 @@ def test_convert_ass_to_srt_bytes() -> None:
         b"Dialogue: 0,0:01:05.50,0:01:08.20,Default,,0,0,0,,{\\i1}Hello world{\\i0}\\NSecond line\n"
         b"Dialogue: 0,0:01:10.00,0:01:12.00,Default,,0,0,0,,Goodbye\n"
     )
-    srt_result = convert_ass_to_srt_bytes(ass_data)
+    srt_result = convert_ass_to_srt_bytes(ass_content_bytes)
     srt_text = srt_result.decode("utf-8")
     assert "00:01:05,500 --> 00:01:08,200" in srt_text
     assert "Hello world\nSecond line" in srt_text
@@ -303,32 +299,28 @@ def test_convert_ass_to_srt_bytes() -> None:
 
 
 def test_save_subtitle_to_disk_variants(tmp_path: Path) -> None:
-    # 1. Plain SRT
     plain_srt = b"1\n00:00:01,000 --> 00:00:02,000\nPlain SRT Content\n"
     dest1 = tmp_path / "plain.srt"
     save_subtitle_to_disk(plain_srt, dest1)
     assert dest1.is_file()
     assert "Plain SRT Content" in dest1.read_text(encoding="utf-8")
 
-    # 2. Gzip-compressed SRT
     gzipped = gzip.compress(plain_srt)
     dest2 = tmp_path / "gzipped.srt"
     save_subtitle_to_disk(gzipped, dest2)
     assert dest2.is_file()
     assert "Plain SRT Content" in dest2.read_text(encoding="utf-8")
 
-    # 3. LZMA/XZ-compressed ASS -> converted to SRT
-    ass_data = (
+    ass_content_bytes = (
         b"[Script Info]\n"
         b"Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,{\\b1}XZ Anime Sub{\\b0}\n"
     )
-    xz_data = lzma.compress(ass_data)
+    xz_compressed_bytes = lzma.compress(ass_content_bytes)
     dest3 = tmp_path / "anime.srt"
-    save_subtitle_to_disk(xz_data, dest3)
+    save_subtitle_to_disk(xz_compressed_bytes, dest3)
     assert dest3.is_file()
     assert "XZ Anime Sub" in dest3.read_text(encoding="utf-8")
 
-    # 4. Zip archive containing matching subtitle
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, "w") as zf:
         zf.writestr("Movie.2024.1080p.srt", plain_srt)
@@ -337,11 +329,9 @@ def test_save_subtitle_to_disk_variants(tmp_path: Path) -> None:
     assert dest4.is_file()
     assert "Plain SRT Content" in dest4.read_text(encoding="utf-8")
 
-    # 5. Empty payload raises ValueError
     with pytest.raises(ValueError, match="Subtitle payload is empty"):
         save_subtitle_to_disk(b"", tmp_path / "empty.srt")
 
-    # 6. Decompression bomb safeguard
     huge_uncompressed = b"A" * (11 * 1024 * 1024)
     huge_gzip = gzip.compress(huge_uncompressed)
     with pytest.raises(ValueError, match="exceeds safe threshold"):

@@ -166,7 +166,6 @@ def test_extract_video_embedded_subtitles_workflow(sample_video_file: Path, tmp_
     ]
 
     with patch("cinesub.modules.extractor.inspect_embedded_subtitles", return_value=tracks):
-        # 1. Dry run
         dry_results = extract_video_embedded_subtitles(
             sample_video_file, language="all", dry_run=True
         )
@@ -175,14 +174,12 @@ def test_extract_video_embedded_subtitles_workflow(sample_video_file: Path, tmp_
         assert dry_results[1]["status"] == "dry_run"
         assert dry_results[2]["status"] == "unsupported_codec"
 
-        # 2. Language filter: 'ro' only
         ro_results = extract_video_embedded_subtitles(
             sample_video_file, language="ro", dry_run=True
         )
         assert len(ro_results) == 2
-        assert all(r["language"] == "ro" for r in ro_results)
+        assert all(track_record["language"] == "ro" for track_record in ro_results)
 
-        # 3. Live extraction with mock ffmpeg
         def mock_extract(video_p, trk, target_p):
             target_p.write_text("SRT content")
             return target_p
@@ -192,14 +189,17 @@ def test_extract_video_embedded_subtitles_workflow(sample_video_file: Path, tmp_
                 sample_video_file, language="ro", force=False
             )
             assert len(live_results) == 2
-            success_item = next(r for r in live_results if r["status"] == "success")
+            success_item = next(
+                track_record for track_record in live_results if track_record["status"] == "success"
+            )
             assert "Inception.2010.1080p.BluRay.x264-SPARKS.ro.srt" in success_item["target_path"]
 
-            # 4. Skip existing when force=False
             skip_results = extract_video_embedded_subtitles(
                 sample_video_file, language="ro", force=False
             )
-            skipped_item = next(r for r in skip_results if r["status"] == "skipped")
+            skipped_item = next(
+                track_record for track_record in skip_results if track_record["status"] == "skipped"
+            )
             assert "already exists" in skipped_item["message"]
 
 
@@ -246,8 +246,8 @@ def test_extract_track_ffmpeg_failure_and_cleanup(sample_video_file: Path, tmp_p
     track = EmbeddedSubtitleTrack(stream_index=2, codec_name="subrip", language="en")
 
     def mock_failing_ffmpeg(cmd, **kwargs):
-        temp_file = Path(cmd[-1])
-        temp_file.write_text("corrupted partial output")
+        staging_subtitle_path = Path(cmd[-1])
+        staging_subtitle_path.write_text("corrupted partial output")
         raise subprocess.CalledProcessError(1, cmd)
 
     with (
@@ -257,10 +257,9 @@ def test_extract_track_ffmpeg_failure_and_cleanup(sample_video_file: Path, tmp_p
         with pytest.raises(subprocess.CalledProcessError):
             extract_track_to_srt(sample_video_file, track, target_srt)
 
-        # Confirm temporary file was cleaned up and destination was not created
         assert not target_srt.exists()
-        temp_files = list(tmp_path.glob(".*.tmp"))
-        assert len(temp_files) == 0
+        residual_tmp_files = list(tmp_path.glob(".*.tmp"))
+        assert len(residual_tmp_files) == 0
 
 
 def test_extract_video_embedded_subtitles_forced_track_naming(
@@ -273,6 +272,8 @@ def test_extract_video_embedded_subtitles_forced_track_naming(
         is_forced=True,
     )
     with patch("cinesub.modules.extractor.inspect_embedded_subtitles", return_value=[track_forced]):
-        results = extract_video_embedded_subtitles(sample_video_file, language="ro", dry_run=True)
-        assert len(results) == 1
-        assert results[0]["target_path"].endswith(".ro.forced.srt")
+        extracted_tracks = extract_video_embedded_subtitles(
+            sample_video_file, language="ro", dry_run=True
+        )
+        assert len(extracted_tracks) == 1
+        assert extracted_tracks[0]["target_path"].endswith(".ro.forced.srt")

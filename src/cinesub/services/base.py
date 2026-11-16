@@ -119,7 +119,11 @@ class BaseHttpService:
         if not subtitle.download_url:
             raise ValueError(f"{self.service_name} match missing download URL.")
 
-        response = self._send_request("GET", subtitle.download_url)
+        download_headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "*/*",
+        }
+        response = self._send_request("GET", subtitle.download_url, headers=download_headers)
         if response.status_code != 200:
             status = response.status_code
             snippet = response.text[:100]

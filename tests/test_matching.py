@@ -126,25 +126,25 @@ def test_obscure_movies_metadata_parsing(tmp_path: Path) -> None:
         },
     ]
 
-    for c in cases:
-        filename = str(c["filename"])
+    for test_case in cases:
+        filename = str(test_case["filename"])
         file_p = tmp_path / filename
         file_p.write_bytes(b"\x00" * 131072)
         meta = parse_video_metadata(file_p, compute_hash=True)
 
-        if "expected_title" in c:
-            assert str(c["expected_title"]).lower() in meta.title.lower()
-        if "expected_year" in c:
-            assert meta.year == c["expected_year"]
-        if "expected_season" in c:
-            assert meta.season == c["expected_season"]
-        if "expected_episode" in c:
-            assert meta.episode == c["expected_episode"]
-        if "expected_screen_size" in c:
-            assert meta.screen_size == c["expected_screen_size"]
-        if "expected_group" in c:
-            assert meta.release_group == c["expected_group"]
-        assert meta.is_episode == c["is_episode"]
+        if "expected_title" in test_case:
+            assert str(test_case["expected_title"]).lower() in meta.title.lower()
+        if "expected_year" in test_case:
+            assert meta.year == test_case["expected_year"]
+        if "expected_season" in test_case:
+            assert meta.season == test_case["expected_season"]
+        if "expected_episode" in test_case:
+            assert meta.episode == test_case["expected_episode"]
+        if "expected_screen_size" in test_case:
+            assert meta.screen_size == test_case["expected_screen_size"]
+        if "expected_group" in test_case:
+            assert meta.release_group == test_case["expected_group"]
+        assert meta.is_episode == test_case["is_episode"]
         assert meta.moviehash is not None
 
 
@@ -262,15 +262,15 @@ def test_world_cinema_and_symbolic_titles(tmp_path: Path) -> None:
         },
     ]
 
-    for c in cases:
-        filename = str(c["filename"])
+    for test_case in cases:
+        filename = str(test_case["filename"])
         file_p = tmp_path / filename
         file_p.write_bytes(b"\x00" * 131072)
         meta = parse_video_metadata(file_p, compute_hash=True)
 
-        assert str(c["expected_title"]).lower() in meta.title.lower()
-        assert meta.year == c["expected_year"]
-        assert meta.release_group == c["expected_group"]
+        assert str(test_case["expected_title"]).lower() in meta.title.lower()
+        assert meta.year == test_case["expected_year"]
+        assert meta.release_group == test_case["expected_group"]
         assert meta.moviehash is not None
 
 
@@ -299,13 +299,13 @@ def test_tough_scoring_and_ranking_tiebreakers() -> None:
 
     scored = []
     for rel_name, matched_by_hash, downloads in candidates:
-        s = score_subtitle_candidate(
+        candidate_score = score_subtitle_candidate(
             video_meta=meta,
             release_name=rel_name,
             matched_by_hash=matched_by_hash,
             downloads=downloads,
         )
-        scored.append((rel_name, matched_by_hash, s))
+        scored.append((rel_name, matched_by_hash, candidate_score))
 
     scored.sort(key=lambda x: x[2], reverse=True)
 
@@ -327,8 +327,8 @@ def test_tough_malformed_subtitles() -> None:
         b'<font color="#ffff00">- Cum merge treaba?</font>\r\n'
         b"- Foarte bine.\r\n"
     )
-    res1 = decode_and_normalize_subtitle_content(dirty_srt)
-    decoded1 = res1.decode("utf-8")
+    normalized_srt_bytes = decode_and_normalize_subtitle_content(dirty_srt)
+    decoded1 = normalized_srt_bytes.decode("utf-8")
     assert "1\n00:00:01,500 --> 00:00:04,200" in decoded1
     assert "2\n00:00:05,000 --> 00:00:08,750" in decoded1
     assert "<i>Salut, <b>lume</b>!</i>" in decoded1
@@ -340,9 +340,9 @@ def test_tough_malformed_subtitles() -> None:
         "Druga linia dialogu w filmie fabularnym.\n"
     )
     raw_pl = text_pl.encode("cp1250")
-    res_pl = decode_and_normalize_subtitle_content(raw_pl)
-    assert "Zażółć" in res_pl.decode("utf-8")
-    assert "polskie znaki" in res_pl.decode("utf-8")
+    normalized_pl_bytes = decode_and_normalize_subtitle_content(raw_pl)
+    assert "Zażółć" in normalized_pl_bytes.decode("utf-8")
+    assert "polskie znaki" in normalized_pl_bytes.decode("utf-8")
 
     text_ro = (
         "1\n00:00:01,000 --> 00:00:04,000\n"
@@ -351,60 +351,56 @@ def test_tough_malformed_subtitles() -> None:
         "Vă rugăm să aveţi răbdare cu pacientul.\n"
     )
     raw_ro = text_ro.encode("cp1250")
-    res_ro = decode_and_normalize_subtitle_content(raw_ro)
-    assert "Lăzărescu" in res_ro.decode("utf-8") or "Lazarescu" in res_ro.decode("utf-8")
+    normalized_ro_bytes = decode_and_normalize_subtitle_content(raw_ro)
+    decoded_ro = normalized_ro_bytes.decode("utf-8")
+    assert "Lăzărescu" in decoded_ro or "Lazarescu" in decoded_ro
 
 
 def test_multilingual_and_special_character_subtitles() -> None:
-    # 1. Greek
     text_el = (
         "1\n00:00:01,000 --> 00:00:04,000\n"
         "Γεια σου κόσμε, ελληνικοί υπότιτλοι για ταινία.\n\n"
         "2\n00:00:05,000 --> 00:00:08,000\n"
         "Δεύτερη γραμμή διαλόγου.\n"
     )
-    res_el = decode_and_normalize_subtitle_content(text_el.encode("cp1253"))
-    assert "ελληνικοί υπότιτλοι" in res_el.decode("utf-8")
+    normalized_el_bytes = decode_and_normalize_subtitle_content(text_el.encode("cp1253"))
+    assert "ελληνικοί υπότιτλοι" in normalized_el_bytes.decode("utf-8")
 
-    # 2. Czech
     text_cs = (
         "1\n00:00:01,000 --> 00:00:04,000\n"
         "Příliš žluťoučký kůň úpěl ďábelské ódy pro film.\n\n"
         "2\n00:00:05,000 --> 00:00:08,000\n"
         "Druhá řádka textu v českém jazyce.\n"
     )
-    res_cs = decode_and_normalize_subtitle_content(text_cs.encode("cp1250"))
-    assert "žluťoučký kůň" in res_cs.decode("utf-8")
+    normalized_cs_bytes = decode_and_normalize_subtitle_content(text_cs.encode("cp1250"))
+    assert "žluťoučký kůň" in normalized_cs_bytes.decode("utf-8")
 
-    # 3. Japanese (CJK UTF-8)
     text_ja = (
         "1\n00:00:01,000 --> 00:00:04,000\n"
         "こんにちは世界、映画の日本語字幕です。\n\n"
         "2\n00:00:05,000 --> 00:00:08,000\n"
         "第二行目のセリフです。\n"
     )
-    res_ja = decode_and_normalize_subtitle_content(text_ja.encode("utf-8"))
-    assert "映画の日本語字幕" in res_ja.decode("utf-8")
+    normalized_ja_bytes = decode_and_normalize_subtitle_content(text_ja.encode("utf-8"))
+    assert "映画の日本語字幕" in normalized_ja_bytes.decode("utf-8")
 
-    # 4. Arabic (UTF-8)
     text_ar = (
         "1\n00:00:01,000 --> 00:00:04,000\n"
         "مرحبا بالعالم، ترجمة الفيلم السينمائي.\n\n"
         "2\n00:00:05,000 --> 00:00:08,000\n"
         "سطر الحوار الثاني في الترجمة.\n"
     )
-    res_ar = decode_and_normalize_subtitle_content(text_ar.encode("utf-8"))
-    assert "ترجمة الفيلم" in res_ar.decode("utf-8")
+    normalized_ar_bytes = decode_and_normalize_subtitle_content(text_ar.encode("utf-8"))
+    assert "ترجمة الفيلم" in normalized_ar_bytes.decode("utf-8")
 
-    # 5. European accents and music/quote symbols (UTF-8 BOM)
     text_euro = (
         "1\n00:00:01,000 --> 00:00:04,000\n"
         "♫ Le cœur d’Amélie — Schön & ¡Olé! «100%»… ♫\n\n"
         "2\n00:00:05,000 --> 00:00:08,000\n"
         "Deuxième ligne avec des caractères spéciaux.\n"
     )
-    res_euro = decode_and_normalize_subtitle_content(text_euro.encode("utf-8-sig"))
-    decoded_euro = res_euro.decode("utf-8")
+    normalized_euro_bytes = decode_and_normalize_subtitle_content(text_euro.encode("utf-8-sig"))
+    decoded_euro = normalized_euro_bytes.decode("utf-8")
     assert "♫ Le cœur d’Amélie" in decoded_euro
     assert "¡Olé!" in decoded_euro
     assert "«100%»…" in decoded_euro
@@ -582,20 +578,20 @@ def test_popular_and_cult_tv_series(tmp_path: Path) -> None:
         },
     ]
 
-    for c in cases:
-        filename = str(c["filename"])
+    for test_case in cases:
+        filename = str(test_case["filename"])
         file_p = tmp_path / filename
         file_p.write_bytes(b"\x00" * 131072)
         meta = parse_video_metadata(file_p, compute_hash=True)
 
-        assert str(c["expected_title"]).lower() in meta.title.lower()
-        if "expected_season" in c:
-            assert meta.season == c["expected_season"]
-        if "expected_episode" in c:
-            assert meta.episode == c["expected_episode"]
-        if "expected_group" in c:
-            assert meta.release_group == c["expected_group"]
-        assert meta.is_episode == c["is_episode"]
+        assert str(test_case["expected_title"]).lower() in meta.title.lower()
+        if "expected_season" in test_case:
+            assert meta.season == test_case["expected_season"]
+        if "expected_episode" in test_case:
+            assert meta.episode == test_case["expected_episode"]
+        if "expected_group" in test_case:
+            assert meta.release_group == test_case["expected_group"]
+        assert meta.is_episode == test_case["is_episode"]
         assert meta.moviehash is not None
 
 
@@ -640,9 +636,9 @@ def test_multipart_movies_title_enrichment(tmp_path: Path) -> None:
     ]
 
     for filename, expected_part in cases:
-        p = tmp_path / filename
-        p.write_bytes(b"\x00" * 131072)
-        meta = parse_video_metadata(p, compute_hash=False)
+        video_file_path = tmp_path / filename
+        video_file_path.write_bytes(b"\x00" * 131072)
+        meta = parse_video_metadata(video_file_path, compute_hash=False)
         assert expected_part.lower() in meta.title.lower()
 
 
@@ -680,9 +676,9 @@ def test_real_yts_library_parsing(tmp_path: Path) -> None:
     ]
 
     for fname, exp_title, exp_year in cases:
-        p = tmp_path / fname
-        p.write_bytes(b"\x00" * 131072)
-        meta = parse_video_metadata(p, compute_hash=True)
+        video_file_path = tmp_path / fname
+        video_file_path.write_bytes(b"\x00" * 131072)
+        meta = parse_video_metadata(video_file_path, compute_hash=True)
         assert meta.title.lower() == exp_title.lower()
         assert meta.year == exp_year
         assert meta.moviehash is not None
@@ -755,24 +751,19 @@ def test_comprehensive_scene_and_p2p_group_clusters(tmp_path: Path) -> None:
 
 def test_short_title_scoring_and_gatekeeper(tmp_path: Path) -> None:
     """Validate strict gatekeeping and penalties for short titles (<= 5 characters)."""
-    # 1. Title 'Up' (2009)
     f_up = tmp_path / "Up.2009.1080p.BluRay.x264-SPARKS.mkv"
     f_up.write_bytes(b"\x00" * 131072)
     meta_up = parse_video_metadata(f_up, compute_hash=False)
 
-    # Valid match
     score_valid_up = score_subtitle_candidate(meta_up, "Up.2009.1080p.BluRay.x264-ROVERS")
     assert score_valid_up > 0.0
 
-    # False-positive substring in middle: 'Stand Up Guys'
     score_stand_up = score_subtitle_candidate(meta_up, "Stand.Up.Guys.2012.1080p.BluRay.x264")
     assert score_stand_up == 0.0
 
-    # False-positive word containing 'up': 'Superbad'
     score_superbad = score_subtitle_candidate(meta_up, "Superbad.2007.1080p.BluRay.x264")
     assert score_superbad == 0.0
 
-    # 2. Title '9' (2009)
     f_nine = tmp_path / "9.2009.1080p.BluRay.x264.mkv"
     f_nine.write_bytes(b"\x00" * 131072)
     meta_nine = parse_video_metadata(f_nine, compute_hash=False)
@@ -780,11 +771,9 @@ def test_short_title_scoring_and_gatekeeper(tmp_path: Path) -> None:
     score_valid_nine = score_subtitle_candidate(meta_nine, "9.2009.1080p.BluRay.x264")
     assert score_valid_nine > 0.0
 
-    # False-positive with preceding title: 'District 9'
     score_district_9 = score_subtitle_candidate(meta_nine, "District.9.2009.1080p.BluRay.x264")
     assert score_district_9 == 0.0
 
-    # 3. Title 'Hero' (1992 vs 2002)
     f_hero_1992 = tmp_path / "Hero.1992.1080p.WEBRip.x264.mp4"
     f_hero_1992.write_bytes(b"\x00" * 131072)
     meta_hero_1992 = parse_video_metadata(f_hero_1992, compute_hash=False)
@@ -803,27 +792,16 @@ def test_video_duration_and_timing_invariants() -> None:
         "2\n01:30:00,000 --> 01:30:10,500\nThe end.\n"
     )
     max_ts = get_subtitle_max_timestamp(srt_content)
-    # 1h 30m 10.5s = 5410.5 seconds
     assert abs(max_ts - 5410.5) < 0.1
 
-    # Empty subtitle yields 0.0
     assert get_subtitle_max_timestamp("") == 0.0
     assert get_subtitle_max_timestamp(b"") == 0.0
 
-    # Invariant 1: Valid alignment (video duration 5415s, within 15s)
     assert validate_subtitle_timing(max_ts, 5415.0) is True
-
-    # Invariant 2: Overrun (> 15s past video end of 5390s)
     assert validate_subtitle_timing(max_ts, 5390.0) is False
-
-    # Invariant 3: Drastic early termination (< 70% of video length)
     assert validate_subtitle_timing(max_ts, 9000.0) is False
-
-    # Invariant 4: Unknown video duration fails open (True)
     assert validate_subtitle_timing(max_ts, None) is True
     assert validate_subtitle_timing(max_ts, 0.0) is True
-
-    # Invariant 5: Zero timestamp fails
     assert validate_subtitle_timing(0.0, 5400.0) is False
 
 
@@ -833,7 +811,6 @@ def test_quality_downgrade_protection(tmp_path: Path) -> None:
     f_video.write_bytes(b"\x00" * 131072)
     meta = parse_video_metadata(f_video, compute_hash=False)
 
-    # Empty file has 0 score
     f_empty = tmp_path / "Inception.2010.1080p.srt"
     f_empty.write_text("", encoding="utf-8")
     assert evaluate_local_subtitle_score(f_empty, meta) == 0.0
@@ -882,9 +859,9 @@ def test_real_media_library_fine_tuning(tmp_path: Path) -> None:
     ]
 
     for fname, expected_title, expected_year, expected_group in real_sample_names:
-        f = tmp_path / fname
-        f.write_bytes(b"\x00" * 131072)
-        meta = parse_video_metadata(f, compute_hash=False)
+        sample_file_path = tmp_path / fname
+        sample_file_path.write_bytes(b"\x00" * 131072)
+        meta = parse_video_metadata(sample_file_path, compute_hash=False)
         assert meta.title.lower() == expected_title.lower(), (
             f"Mismatch for {fname}: got {meta.title}"
         )

@@ -165,5 +165,5 @@ def test_atomic_write_file_cleanup_on_error(tmp_path: Path) -> None:
             atomic_write_file(dest, b"sample srt content")
         except OSError:
             pass
-    temp_files = list(tmp_path.glob(".*.tmp"))
-    assert len(temp_files) == 0
+    residual_tmp_files = list(tmp_path.glob(".*.tmp"))
+    assert len(residual_tmp_files) == 0

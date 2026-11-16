@@ -81,32 +81,31 @@ class AssrtService(BaseHttpService):
         if "token" not in request_params and self.api_token:
             request_params["token"] = self.api_token
 
-        current_base = self.base_url
-        for attempt in range(max_retries):
+        base_urls = [self.base_url, ASSRT_FALLBACK_URL] if not url.startswith("http") else [url]
+        last_network_error: Exception | None = None
+        for current_base in base_urls:
             target_url = url if url.startswith("http") else f"{current_base}{url}"
-            try:
-                return super()._send_request(
-                    method=method,
-                    url=target_url,
-                    params=request_params,
-                    content=content,
-                    headers=headers,
-                    max_retries=1,
-                )
-            except httpx.RequestError as exc:
-                if attempt == max_retries - 1:
-                    if (
-                        not url.startswith("http")
-                        and current_base == self.base_url
-                        and current_base != ASSRT_FALLBACK_URL
-                    ):
-                        current_base = ASSRT_FALLBACK_URL
-                        continue
-                    raise
-                backoff_delay = 0.5 * (2**attempt)
-                LOG.debug(f"Assrt network error ({exc}), retrying in {backoff_delay:.1f}s...")
-                time.sleep(backoff_delay)
+            for attempt in range(max_retries):
+                try:
+                    return super()._send_request(
+                        method=method,
+                        url=target_url,
+                        params=request_params,
+                        content=content,
+                        headers=headers,
+                        max_retries=1,
+                    )
+                except httpx.RequestError as exc:
+                    last_network_error = exc
+                    if attempt < max_retries - 1:
+                        backoff_delay = 0.5 * (2**attempt)
+                        LOG.debug(
+                            f"Assrt network error ({exc}), retrying in {backoff_delay:.1f}s..."
+                        )
+                        time.sleep(backoff_delay)
 
+        if last_network_error:
+            raise last_network_error
         raise RuntimeError("Assrt request failed after retries.")
 
     def _extract_languages(self, lang_payload: Any) -> set[str]:
@@ -118,10 +117,14 @@ class AssrtService(BaseHttpService):
                 for lang_key, is_active in langlist.items():
                     if is_active and lang_key in _ASSRT_LANG_MAP:
                         languages.add(_ASSRT_LANG_MAP[lang_key])
-            desc = str(lang_payload.get("desc", ""))
-            if "简" in desc or "繁" in desc or "中" in desc:
+            language_description = str(lang_payload.get("desc", ""))
+            if (
+                "简" in language_description
+                or "繁" in language_description
+                or "中" in language_description
+            ):
                 languages.add("zh")
-            if "英" in desc:
+            if "英" in language_description:
                 languages.add("en")
         elif isinstance(lang_payload, list):
             for lang_token in lang_payload:
@@ -200,7 +203,7 @@ class AssrtService(BaseHttpService):
             )
 
             download_url = candidate_sub.get("url")
-            # If download URL is inside filelist
+            # Multi-file archives on Assrt embed individual file download URLs in filelist
             if not download_url and candidate_sub.get("filelist"):
                 file_records: list[dict[str, Any]] = candidate_sub["filelist"]
                 for file_record in file_records:
@@ -252,11 +255,11 @@ class AssrtService(BaseHttpService):
         if detail_payload.get("status", 0) != 0:
             raise RuntimeError(f"Assrt sub/detail error: {detail_payload.get('errmsg')}")
 
-        subs = detail_payload.get("sub", {}).get("subs", [])
-        if not subs:
+        subtitle_details = detail_payload.get("sub", {}).get("subs", [])
+        if not subtitle_details:
             raise ValueError(f"Assrt subtitle detail for ID {subtitle.id} not found.")
 
-        sub_detail = subs[0]
+        sub_detail = subtitle_details[0]
         url = sub_detail.get("url")
         if not url and sub_detail.get("filelist"):
             for file_entry in sub_detail["filelist"]:

@@ -364,7 +364,7 @@ def test_tmdb_service_search_and_enrichment(sample_video_meta: VideoMetadata) ->
     service = TmdbService(access_token="mock_tmdb_token", account_id="12345")
     assert service.is_configured is True
 
-    mock_movie_res = {
+    mock_movie_response = {
         "page": 1,
         "results": [
             {
@@ -382,7 +382,7 @@ def test_tmdb_service_search_and_enrichment(sample_video_meta: VideoMetadata) ->
 
     def mock_request(method, url, **kwargs):
         if "search/movie" in url:
-            return httpx.Response(200, json=mock_movie_res, request=httpx.Request(method, url))
+            return httpx.Response(200, json=mock_movie_response, request=httpx.Request(method, url))
         if "movie/27205/external_ids" in url:
             return httpx.Response(200, json=mock_ext_ids, request=httpx.Request(method, url))
         if "account/12345/favorite" in url or "account/12345/watchlist" in url:
@@ -392,17 +392,14 @@ def test_tmdb_service_search_and_enrichment(sample_video_meta: VideoMetadata) ->
         return httpx.Response(404, request=httpx.Request(method, url))
 
     with patch("cinesub.services.base.SESSION.request", side_effect=mock_request):
-        # 1. Search movie
         movie = service.search_movie("Inception", 2010)
         assert movie is not None
         assert movie["id"] == 27205
 
-        # 2. Enrich metadata
         enriched = service.enrich_video_metadata(sample_video_meta)
         assert enriched.tmdb_id == 27205
         assert enriched.imdb_id == "tt1375666"
 
-        # 3. Add to favorite and watchlist
         fav_ok = service.add_to_favorite(27205, favorite=True)
         assert fav_ok is True
 
@@ -457,7 +454,6 @@ def test_subsro_search_and_download(sample_video_meta: VideoMetadata, tmp_path: 
         assert len(matches) == 1
         assert matches[0].provider == "subsro"
         assert matches[0].id == "55432"
-        # Check retail bonus was applied
         assert matches[0].score > 50.0
 
         target_srt = tmp_path / "Inception.ro.srt"
@@ -717,8 +713,8 @@ def test_betaseries_error_4001_handling(sample_video_meta: VideoMetadata) -> Non
             request=httpx.Request("GET", "https://api.betaseries.com"),
         ),
     ):
-        results = service.search(sample_video_meta, language="en")
-        assert results == []
+        subtitle_matches = service.search(sample_video_meta, language="en")
+        assert subtitle_matches == []
 
 
 def test_opensubtitles_download_quota_exhausted(tmp_path: Path) -> None:

@@ -59,9 +59,9 @@ class BetaSeriesService(BaseHttpService):
             if video_meta.is_episode and video_meta.season and video_meta.episode:
                 subs_list = self._search_episode(video_meta, target_lang)
             else:
-                subs_list = self._search_movie(target_lang)
+                subs_list = self._search_movie(video_meta, target_lang)
 
-            results: list[SubtitleMatch] = []
+            subtitle_matches: list[SubtitleMatch] = []
             for sub_entry in subs_list:
                 sub_id = str(sub_entry.get("id", ""))
                 dl_url = str(sub_entry.get("url") or "")
@@ -81,7 +81,7 @@ class BetaSeriesService(BaseHttpService):
                     matched_by_hash=False,
                 )
 
-                results.append(
+                subtitle_matches.append(
                     SubtitleMatch(
                         id=sub_id,
                         provider="betaseries",
@@ -94,8 +94,8 @@ class BetaSeriesService(BaseHttpService):
                     )
                 )
 
-            results.sort(key=lambda m: m.score, reverse=True)
-            return results
+            subtitle_matches.sort(key=lambda m: m.score, reverse=True)
+            return subtitle_matches
 
         except (httpx.HTTPError, orjson.JSONDecodeError, RuntimeError) as exc:
             LOG.debug(f"BetaSeries search error for {video_meta.title}: {exc}")
@@ -113,14 +113,13 @@ class BetaSeriesService(BaseHttpService):
         elif language in ("fr", "fra"):
             params["language"] = "vf"
 
-        # Attempt targeted show lookup if IMDb ID or title is available
         if video_meta.imdb_id:
             params["imdb_id"] = video_meta.imdb_id
 
-        resp = self._send_request("GET", endpoint, params=params)
-        if resp.status_code == 400:
+        response = self._send_request("GET", endpoint, params=params)
+        if response.status_code == 400:
             try:
-                error_payload = orjson.loads(resp.content)
+                error_payload = orjson.loads(response.content)
                 for err in error_payload.get("errors", []):
                     code = err.get("code")
                     if code == 1001:
@@ -130,15 +129,14 @@ class BetaSeriesService(BaseHttpService):
             except orjson.JSONDecodeError as exc:
                 LOG.debug(f"Failed decoding BetaSeries error response: {exc}")
             return []
-        if resp.status_code != 200:
+        if response.status_code != 200:
             return []
 
-        response_payload = orjson.loads(resp.content)
+        response_payload = orjson.loads(response.content)
         raw_subtitles = response_payload.get("subtitles", [])
         if not isinstance(raw_subtitles, list):
             return []
 
-        # Filter strictly by season and episode
         filtered: list[dict[str, Any]] = []
         for sub_entry in raw_subtitles:
             season_num = sub_entry.get("season")
@@ -155,7 +153,7 @@ class BetaSeriesService(BaseHttpService):
 
         return filtered
 
-    def _search_movie(self, language: str) -> list[dict[str, Any]]:
+    def _search_movie(self, video_meta: VideoMetadata, language: str) -> list[dict[str, Any]]:
         """Search subtitles for a movie."""
         endpoint = f"{BETASERIES_API_URL}/subtitles/last"
         params: dict[str, Any] = {
@@ -167,10 +165,13 @@ class BetaSeriesService(BaseHttpService):
         elif language in ("fr", "fra"):
             params["language"] = "vf"
 
-        resp = self._send_request("GET", endpoint, params=params)
-        if resp.status_code == 400:
+        if video_meta.imdb_id:
+            params["imdb_id"] = video_meta.imdb_id
+
+        response = self._send_request("GET", endpoint, params=params)
+        if response.status_code == 400:
             try:
-                error_payload = orjson.loads(resp.content)
+                error_payload = orjson.loads(response.content)
                 for err in error_payload.get("errors", []):
                     code = err.get("code")
                     if code == 1001:
@@ -180,10 +181,10 @@ class BetaSeriesService(BaseHttpService):
             except orjson.JSONDecodeError as exc:
                 LOG.debug(f"Failed decoding BetaSeries error response: {exc}")
             return []
-        if resp.status_code != 200:
+        if response.status_code != 200:
             return []
 
-        response_payload = orjson.loads(resp.content)
+        response_payload = orjson.loads(response.content)
         raw_subtitles = response_payload.get("subtitles", [])
         if not isinstance(raw_subtitles, list):
             return []

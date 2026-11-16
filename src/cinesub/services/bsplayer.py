@@ -123,7 +123,7 @@ class BsplayerService(BaseHttpService):
             return
         try:
             self._send_soap_call("logOut", f"<handle>{token}</handle>")
-        except Exception as exc:
+        except (httpx.HTTPError, RuntimeError, ValueError, ConnectionError, OSError) as exc:
             LOG.debug(f"BSPlayer logout ignored: {exc}")
 
     def _get_language_ids(self, language_code: str) -> str:
@@ -162,7 +162,7 @@ class BsplayerService(BaseHttpService):
 
         try:
             session_token = self._login()
-        except Exception as exc:
+        except (httpx.HTTPError, RuntimeError, ValueError, ConnectionError, OSError) as exc:
             LOG.debug(f"BSPlayer login failed: {exc}")
             return []
 
@@ -176,7 +176,7 @@ class BsplayerService(BaseHttpService):
 
         try:
             return_node = self._send_soap_call("searchSubtitles", search_params)
-        except Exception as exc:
+        except (httpx.HTTPError, RuntimeError, ValueError, ConnectionError, OSError) as exc:
             LOG.debug(f"BSPlayer searchSubtitles request failed: {exc}")
             return []
         finally:

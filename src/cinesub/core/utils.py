@@ -188,6 +188,8 @@ _DIALOGUE_REGEX = re.compile(
 def _parse_ass_timestamp(timestamp_str: str) -> datetime.timedelta:
     """Parse ASS timestamp H:MM:SS.cc into datetime.timedelta."""
     parts = timestamp_str.replace(",", ".").split(":")
+    if len(parts) < 3:
+        raise ValueError(f"Invalid ASS timestamp: {timestamp_str}")
     hours = int(parts[0])
     minutes = int(parts[1])
     sec_parts = parts[2].split(".")
@@ -243,7 +245,7 @@ def convert_ass_to_srt_bytes(ass_bytes: bytes) -> bytes:
                 )
             )
             current_index += 1
-        except (ValueError, IndexError):
+        except ValueError:
             continue
 
     if not subtitles:
@@ -713,7 +715,7 @@ def _parse_sexagesimal_seconds(duration_str: str) -> float | None:
         if len(parts) == 2:
             return float(parts[0]) * 60.0 + float(parts[1])
         return float(duration_str)
-    except (ValueError, TypeError):
+    except ValueError:
         return None
 
 
@@ -788,7 +790,7 @@ def get_subtitle_max_timestamp(subtitle_content: str | bytes) -> float:
             (cue.end.total_seconds() for cue in srt.parse(text)),
             default=0.0,
         )
-    except (srt.SRTParseError, ValueError, TypeError):
+    except (srt.SRTParseError, ValueError):
         return 0.0
 
 
@@ -1000,20 +1002,26 @@ def score_subtitle_candidate(
         if match_anchor:
             prefix = stem_without_brackets[: match_anchor.start()].strip(" ._-")
             prefix_tokens = [
-                t for t in re.findall(r"[a-z0-9]+", prefix) if t not in ("the", "a", "an")
+                token
+                for token in re.findall(r"[a-z0-9]+", prefix)
+                if token not in ("the", "a", "an")
             ]
             if prefix_tokens:
                 return 0.0
 
         # Short title release year alignment: 4-digit year must match video_meta.year
         if video_meta.year:
-            candidate_years = [int(y) for y in re.findall(r"\b(19\d\d|20\d\d)\b", rel_lower)]
+            candidate_years = [
+                int(year_token) for year_token in re.findall(r"\b(19\d\d|20\d\d)\b", rel_lower)
+            ]
             if candidate_years and video_meta.year not in candidate_years:
                 return 0.0
 
     # General release year consistency for movies: reject candidates with conflicting release years
     if video_meta.year and not video_meta.is_episode:
-        all_candidate_years = [int(y) for y in re.findall(r"\b(19\d\d|20\d\d)\b", rel_lower)]
+        all_candidate_years = [
+            int(year_token) for year_token in re.findall(r"\b(19\d\d|20\d\d)\b", rel_lower)
+        ]
         if all_candidate_years and video_meta.year not in all_candidate_years:
             return 0.0
 

@@ -36,8 +36,8 @@ def test_rate_limiter_multithreaded() -> None:
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(worker) for _ in range(4)]
-        for f in futures:
-            f.result()
+        for future in futures:
+            future.result()
 
 
 def test_rate_limiter_circuit_breaker() -> None:

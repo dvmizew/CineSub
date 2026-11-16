@@ -20,16 +20,16 @@ from rich.progress import (
 from rich.theme import Theme
 
 if sys.platform == "win32":
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(OSError, AttributeError):
         import ctypes
 
         ctypes.windll.kernel32.SetConsoleOutputCP(65001)
         ctypes.windll.kernel32.SetConsoleCP(65001)
     if hasattr(sys.stdout, "reconfigure"):
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(OSError, ValueError):
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if hasattr(sys.stderr, "reconfigure"):
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(OSError, ValueError):
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 _THEME = Theme(
@@ -119,7 +119,7 @@ def interactive_pause_listener(
         nonlocal pause_start_time, original_description
         if progress is not None and task_id is not None:
             pause_start_time = progress.get_time()
-            progress_task = next((t for t in progress.tasks if t.id == task_id), None)
+            progress_task = next((task for task in progress.tasks if task.id == task_id), None)
             if progress_task:
                 original_description = progress_task.description
             progress.stop_task(task_id)
@@ -134,14 +134,14 @@ def interactive_pause_listener(
         if progress is not None and task_id is not None:
             if pause_start_time is not None:
                 pause_duration = progress.get_time() - pause_start_time
-                progress_task = next((t for t in progress.tasks if t.id == task_id), None)
+                progress_task = next((task for task in progress.tasks if task.id == task_id), None)
                 if progress_task and progress_task.start_time is not None:
                     progress_task.start_time += pause_duration
                 if progress_task:
                     progress_task.stop_time = None
                 pause_start_time = None
-            desc = original_description or "[cyan]Processing..."
-            progress.update(task_id, description=desc)
+            task_description = original_description or "[cyan]Processing..."
+            progress.update(task_id, description=task_description)
             progress.refresh()
 
     def _toggle_pause() -> None:
@@ -197,7 +197,7 @@ def interactive_pause_listener(
 
             orig_term = termios.tcgetattr(sys.stdin.fileno())
             tty.setcbreak(sys.stdin.fileno())
-        except (ImportError, OSError, ValueError):
+        except (ImportError, OSError):
             return
 
         try:

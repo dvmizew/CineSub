@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
+_user_home_env = Path.home() / ".env"
+if _user_home_env.is_file():
+    load_dotenv(dotenv_path=_user_home_env)
 
 APP_NAME = "CineSub"
 APP_VERSION = "0.2.0"
