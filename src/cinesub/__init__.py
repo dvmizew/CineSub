@@ -5,11 +5,10 @@ try:
 except PackageNotFoundError:
     __version__ = "0.2.0"
 
-from cinesub.modules.downloader import download_batch, download_bulk, download_subtitle
+from cinesub.modules.downloader import download_batch, download_subtitle
 
 __all__ = [
     "__version__",
     "download_batch",
-    "download_bulk",
     "download_subtitle",
 ]

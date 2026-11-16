@@ -29,7 +29,7 @@ from cinesub.core.utils import (
     parse_directory_metadata,
     parse_video_metadata,
 )
-from cinesub.modules.downloader import download_batch, download_bulk_batch
+from cinesub.modules.downloader import download_batch
 from cinesub.modules.extractor import extract_embedded_subtitles_batch
 from cinesub.services.tmdb import TmdbService
 
@@ -113,6 +113,13 @@ def download(
             help="Target subtitle language code (ISO 639-1, e.g., 'ro', 'en', 'es').",
         ),
     ] = DEFAULT_LANGUAGE,
+    alternatives: Annotated[
+        int,
+        Parameter(
+            name=["--alternatives", "-a", "-n"],
+            help="Number of subtitle alternatives to download per video (default: 1).",
+        ),
+    ] = 1,
     provider: Annotated[
         str,
         Parameter(
@@ -166,13 +173,14 @@ def download(
         ),
     ] = False,
 ) -> dict:
-    """Download the highest-scoring matching subtitles for video files."""
+    """Download matching subtitles for video files (best match or multiple alternatives)."""
     LOG.verbose = verbose
 
     try:
         report = download_batch(
             target_path=path,
             language=language,
+            alternatives=alternatives,
             provider=provider,
             force=force,
             threads=threads,
@@ -188,56 +196,93 @@ def download(
 
         if len(results) == 1 and results[0].get("status") in ("success", "skipped", "dry_run"):
             single_result = results[0]
-            matched_subtitle = single_result.get("subtitle", {})
             file_status = single_result.get("status")
 
-            if file_status == "dry_run":
-                title = "⚡ Dry-Run Simulation (No Files Modified)"
-                color = "yellow"
-            elif file_status == "skipped":
-                title = "✓ Subtitle Already Present"
-                color = "yellow"
+            if alternatives > 1:
+                alternative_subtitles = single_result.get("subtitles", [])
+                title_prefix = "⚡ Dry-Run Simulated" if dry_run else "✓ Downloaded"
+                table_heading = (
+                    f"[bold green]{title_prefix} {len(alternative_subtitles)} "
+                    "Subtitle Alternatives[/bold green]"
+                )
+                table = Table(title=table_heading)
+                table.add_column("#", style="dim", justify="right")
+                table.add_column("Provider", style="cyan")
+                table.add_column("Release Match", style="white")
+                table.add_column("Score", justify="right", style="yellow")
+                table.add_column("Saved File", style="green")
+
+                for rank_idx, sub_candidate in enumerate(alternative_subtitles, start=1):
+                    saved_name = Path(sub_candidate.get("saved_path", "")).name
+                    rel_name = sub_candidate.get("release_name", "")
+                    table.add_row(
+                        str(rank_idx),
+                        sub_candidate.get("provider", "").upper(),
+                        escape(rel_name[:45] + ("..." if len(rel_name) > 45 else "")),
+                        f"{sub_candidate.get('score', 0.0):.1f}",
+                        escape(saved_name),
+                    )
+
+                CONSOLE.print(table)
+                saved_loc = path.parent if path.is_file() else path
+                if not dry_run:
+                    CONSOLE.print(f"\n[bold green]✓ Files saved in:[/] {escape(str(saved_loc))}\n")
+                else:
+                    CONSOLE.print(
+                        f"\n[bold yellow]⚡ Simulated directory:[/] {escape(str(saved_loc))}\n"
+                    )
             else:
-                title = "✓ Subtitle Download Complete"
-                color = "green"
+                matched_subtitle = single_result.get("subtitle", {})
+                if file_status == "dry_run":
+                    title = "⚡ Dry-Run Simulation (No Files Modified)"
+                    color = "yellow"
+                elif file_status == "skipped":
+                    title = "✓ Subtitle Already Present"
+                    color = "yellow"
+                else:
+                    title = "✓ Subtitle Download Complete"
+                    color = "green"
 
-            table = Table(title=f"[bold {color}]{title}[/bold {color}]")
-            table.add_column("Property", style="cyan", no_wrap=True)
-            table.add_column("Value", style="white")
+                table = Table(title=f"[bold {color}]{title}[/bold {color}]")
+                table.add_column("Property", style="cyan", no_wrap=True)
+                table.add_column("Value", style="white")
 
-            table.add_row("Video File", escape(str(single_result.get("video_file") or "")))
-            table.add_row(
-                "Detected Title",
-                escape(f"{single_result.get('title')} ({single_result.get('year') or 'N/A'})"),
-            )
-            table.add_row("OpenSubtitles Hash", single_result.get("moviehash") or "N/A")
-            table.add_row("Selected Provider", matched_subtitle.get("provider", "").upper())
-            table.add_row(
-                "Match Strategy",
-                "Existing Local File"
-                if file_status == "skipped"
-                else (
-                    "Exact HASH Match"
-                    if matched_subtitle.get("matched_by_hash")
-                    else "Relevance Score"
-                ),
-            )
-            table.add_row("Subtitle Release", escape(str(matched_subtitle.get("release_name", ""))))
-            table.add_row("Language", matched_subtitle.get("language", "").upper())
-            score_num = matched_subtitle.get("score")
-            table.add_row(
-                "Match Score",
-                f"{score_num:.1f}" if score_num is not None else "100.0",
-            )
-            table.add_row("Target SRT Path", escape(str(matched_subtitle.get("saved_path", ""))))
+                table.add_row("Video File", escape(str(single_result.get("video_file") or "")))
+                table.add_row(
+                    "Detected Title",
+                    escape(f"{single_result.get('title')} ({single_result.get('year') or 'N/A'})"),
+                )
+                table.add_row("OpenSubtitles Hash", single_result.get("moviehash") or "N/A")
+                table.add_row("Selected Provider", matched_subtitle.get("provider", "").upper())
+                table.add_row(
+                    "Match Strategy",
+                    "Existing Local File"
+                    if file_status == "skipped"
+                    else (
+                        "Exact HASH Match"
+                        if matched_subtitle.get("matched_by_hash")
+                        else "Relevance Score"
+                    ),
+                )
+                table.add_row(
+                    "Subtitle Release", escape(str(matched_subtitle.get("release_name", "")))
+                )
+                table.add_row("Language", matched_subtitle.get("language", "").upper())
+                score_num = matched_subtitle.get("score")
+                table.add_row(
+                    "Match Score",
+                    f"{score_num:.1f}" if score_num is not None else "100.0",
+                )
+                saved_path_str = escape(str(matched_subtitle.get("saved_path", "")))
+                table.add_row("Target SRT Path", saved_path_str)
 
-            CONSOLE.print(table)
-            if file_status != "dry_run":
-                target_saved = escape(str(matched_subtitle.get("saved_path") or ""))
-                CONSOLE.print(f"\n[bold green]✓ Ready for playback:[/] {target_saved}\n")
-            else:
-                simulated_path = escape(str(matched_subtitle.get("saved_path") or ""))
-                CONSOLE.print(f"\n[bold yellow]⚡ Simulated target path:[/] {simulated_path}\n")
+                CONSOLE.print(table)
+                if file_status != "dry_run":
+                    target_saved = escape(str(matched_subtitle.get("saved_path") or ""))
+                    CONSOLE.print(f"\n[bold green]✓ Ready for playback:[/] {target_saved}\n")
+                else:
+                    simulated_path = escape(str(matched_subtitle.get("saved_path") or ""))
+                    CONSOLE.print(f"\n[bold yellow]⚡ Simulated target path:[/] {simulated_path}\n")
         else:
             if report.get("interrupted"):
                 dashboard_title = "⏹ CineSub Download Interrupted (Ctrl+C)"
@@ -261,47 +306,64 @@ def download(
             table = Table(title="[bold]Detailed Results Breakdown[/bold]")
             table.add_column("Status", justify="center")
             table.add_column("Video File", style="white")
-            table.add_column("Provider", style="cyan")
-            table.add_column("Score / Details", style="green")
+            if alternatives > 1:
+                table.add_column("Alternatives Found", justify="right", style="cyan")
+            else:
+                table.add_column("Provider", style="cyan")
+                table.add_column("Score / Details", style="green")
 
             for result_entry in results:
                 file_status = result_entry.get("status")
                 video_name = escape(str(result_entry.get("video_file") or ""))
-                if file_status in ("success", "downloaded"):
-                    matched_subtitle = result_entry.get("subtitle", {})
-                    score_num = matched_subtitle.get("score", 0.0)
-                    table.add_row(
-                        "[bold green]SUCCESS[/bold green]",
-                        video_name,
-                        matched_subtitle.get("provider", "").upper(),
-                        f"Score: {score_num:.1f}",
-                    )
-                elif file_status == "dry_run":
-                    matched_subtitle = result_entry.get("subtitle", {})
-                    score_num = matched_subtitle.get("score", 0.0)
-                    table.add_row(
-                        "[bold yellow]DRY-RUN[/bold yellow]",
-                        video_name,
-                        matched_subtitle.get("provider", "").upper(),
-                        f"Score: {score_num:.1f}",
-                    )
-                elif file_status == "skipped":
-                    matched_subtitle = result_entry.get("subtitle", {})
-                    rel_name = escape(str(matched_subtitle.get("release_name", "SRT")))
-                    table.add_row(
-                        "[bold dim]SKIPPED[/bold dim]",
-                        video_name,
-                        "LOCAL",
-                        f"Exists: {rel_name}",
-                    )
+                if alternatives > 1:
+                    if file_status in ("success", "dry_run"):
+                        count_str = str(len(result_entry.get("subtitles", [])))
+                        status_str = (
+                            "[bold yellow]DRY-RUN[/bold yellow]"
+                            if dry_run
+                            else "[bold green]SUCCESS[/bold green]"
+                        )
+                        table.add_row(status_str, video_name, count_str)
+                    elif file_status == "skipped":
+                        table.add_row("[bold dim]SKIPPED[/bold dim]", video_name, "0")
+                    else:
+                        table.add_row("[bold red]FAILED[/bold red]", video_name, "0")
                 else:
-                    err_msg = escape(str(result_entry.get("error", "Error"))[:35])
-                    table.add_row(
-                        "[bold red]FAILED[/bold red]",
-                        video_name,
-                        "-",
-                        err_msg,
-                    )
+                    if file_status in ("success", "downloaded"):
+                        matched_subtitle = result_entry.get("subtitle", {})
+                        score_num = matched_subtitle.get("score", 0.0)
+                        table.add_row(
+                            "[bold green]SUCCESS[/bold green]",
+                            video_name,
+                            matched_subtitle.get("provider", "").upper(),
+                            f"Score: {score_num:.1f}",
+                        )
+                    elif file_status == "dry_run":
+                        matched_subtitle = result_entry.get("subtitle", {})
+                        score_num = matched_subtitle.get("score", 0.0)
+                        table.add_row(
+                            "[bold yellow]DRY-RUN[/bold yellow]",
+                            video_name,
+                            matched_subtitle.get("provider", "").upper(),
+                            f"Score: {score_num:.1f}",
+                        )
+                    elif file_status == "skipped":
+                        matched_subtitle = result_entry.get("subtitle", {})
+                        rel_name = escape(str(matched_subtitle.get("release_name", "SRT")))
+                        table.add_row(
+                            "[bold dim]SKIPPED[/bold dim]",
+                            video_name,
+                            "LOCAL",
+                            f"Exists: {rel_name}",
+                        )
+                    else:
+                        err_msg = escape(str(result_entry.get("error", "Error"))[:35])
+                        table.add_row(
+                            "[bold red]FAILED[/bold red]",
+                            video_name,
+                            "-",
+                            err_msg,
+                        )
 
             CONSOLE.print(table)
             CONSOLE.print()
@@ -312,186 +374,6 @@ def download(
         if not is_interruption(exc):
             raise
         LOG.warning("\n⏹️  [bold yellow]INTERRUPTED[/] - Download stopped by user (Ctrl+C).")
-        return {"status": "interrupted"}
-    except Exception as exc:
-        LOG.error(str(exc))
-        return {"status": "error", "error": str(exc)}
-
-
-# Backward compatibility alias
-sync = download
-
-
-@app.command
-def bulk(
-    path: Annotated[
-        Path,
-        Parameter(
-            show_default=False,
-            help="Path to a video file or a directory containing video files.",
-        ),
-    ],
-    *,
-    language: Annotated[
-        str,
-        Parameter(
-            name=["--language", "-l"],
-            help="Target subtitle language code (e.g., 'ro', 'en').",
-        ),
-    ] = DEFAULT_LANGUAGE,
-    limit: Annotated[
-        int,
-        Parameter(
-            name=["--limit", "-n"],
-            help="Number of subtitle alternatives to download (5-10 recommended).",
-        ),
-    ] = 5,
-    provider: Annotated[
-        str,
-        Parameter(
-            name=["--provider", "-p"],
-            help=(
-                "Provider to search: 'all', 'opensubtitles', 'subdl', 'subsource', "
-                "'subsro', 'betaseries', 'gestdown', 'bsplayer', 'animetosho', or 'assrt'."
-            ),
-        ),
-    ] = "all",
-    threads: Annotated[
-        int,
-        Parameter(
-            name=["--threads", "-t"],
-            help="Number of concurrent worker threads for batch processing.",
-        ),
-    ] = 4,
-    json_report: Annotated[
-        Path | None,
-        Parameter(
-            name=["--json", "-j"],
-            help="Save structured report to a JSON or JSONL file.",
-        ),
-    ] = None,
-    force: Annotated[
-        bool,
-        Parameter(
-            name=["--force", "-f"],
-            help="Overwrite existing files.",
-        ),
-    ] = False,
-    dry_run: Annotated[
-        bool,
-        Parameter(
-            name=["--dry-run", "-d"],
-            help="Simulate search and matching without downloading files.",
-        ),
-    ] = False,
-    verbose: Annotated[
-        bool,
-        Parameter(
-            name=["--verbose"],
-            help="Enable verbose debug logging.",
-        ),
-    ] = False,
-) -> dict:
-    """Download multiple subtitle alternatives for manual inspection and comparison."""
-    LOG.verbose = verbose
-
-    try:
-        report = download_bulk_batch(
-            target_path=path,
-            language=language,
-            limit=limit,
-            provider=provider,
-            force=force,
-            threads=threads,
-            json_path=json_report,
-            dry_run=dry_run,
-        )
-
-        results = report.get("results", [])
-        total_files = report.get("total_files", len(results))
-        duration = float(report.get("duration_seconds", 0.0))
-        throughput = float(report.get("throughput_files_per_sec", 0.0))
-
-        if len(results) == 1 and results[0].get("status") in ("success", "dry_run"):
-            alternative_subtitles = results[0].get("subtitles", [])
-            title_prefix = "⚡ Dry-Run Simulated" if dry_run else "✓ Downloaded"
-            table_heading = (
-                f"[bold green]{title_prefix} {len(alternative_subtitles)} "
-                "Subtitle Alternatives[/bold green]"
-            )
-            table = Table(title=table_heading)
-            table.add_column("#", style="dim", justify="right")
-            table.add_column("Provider", style="cyan")
-            table.add_column("Release Match", style="white")
-            table.add_column("Score", justify="right", style="yellow")
-            table.add_column("Saved File", style="green")
-
-            for rank_idx, sub_candidate in enumerate(alternative_subtitles, start=1):
-                saved_name = Path(sub_candidate.get("saved_path", "")).name
-                rel_name = sub_candidate.get("release_name", "")
-                table.add_row(
-                    str(rank_idx),
-                    sub_candidate.get("provider", "").upper(),
-                    escape(rel_name[:45] + ("..." if len(rel_name) > 45 else "")),
-                    f"{sub_candidate.get('score', 0.0):.1f}",
-                    escape(saved_name),
-                )
-
-            CONSOLE.print(table)
-            saved_loc = path.parent if path.is_file() else path
-            if not dry_run:
-                CONSOLE.print(f"\n[bold green]✓ Files saved in:[/] {escape(str(saved_loc))}\n")
-            else:
-                CONSOLE.print(
-                    f"\n[bold yellow]⚡ Simulated directory:[/] {escape(str(saved_loc))}\n"
-                )
-        else:
-            if report.get("interrupted"):
-                dashboard_title = "⏹ CineSub Bulk Interrupted (Ctrl+C)"
-            elif dry_run:
-                dashboard_title = "⚡ CineSub Bulk Dry-Run"
-            else:
-                dashboard_title = "✓ CineSub Bulk Summary"
-
-            _render_stats_card(
-                title=dashboard_title,
-                total=total_files,
-                success=report.get("successful", 0),
-                skipped=0,
-                dry_run=report.get("dry_run_count", 0),
-                failed=report.get("failed", 0),
-                duration=duration,
-                throughput=throughput,
-                is_dry_run=dry_run,
-            )
-
-            table = Table(title="[bold]Detailed Results Breakdown[/bold]")
-            table.add_column("Status", justify="center")
-            table.add_column("Video File", style="white")
-            table.add_column("Subtitles Found", justify="right", style="cyan")
-
-            for batch_entry in results:
-                video_name = escape(str(batch_entry.get("video_file") or ""))
-                if batch_entry.get("status") in ("success", "dry_run"):
-                    count_str = str(len(batch_entry.get("subtitles", [])))
-                    status_str = (
-                        "[bold yellow]DRY-RUN[/bold yellow]"
-                        if dry_run
-                        else "[bold green]SUCCESS[/bold green]"
-                    )
-                    table.add_row(status_str, video_name, count_str)
-                else:
-                    table.add_row("[bold red]FAILED[/bold red]", video_name, "0")
-
-            CONSOLE.print(table)
-            CONSOLE.print()
-
-        return report
-
-    except (KeyboardInterrupt, RuntimeError) as exc:
-        if not is_interruption(exc):
-            raise
-        LOG.warning("\n⏹️  [bold yellow]INTERRUPTED[/] - Bulk download stopped by user (Ctrl+C).")
         return {"status": "interrupted"}
     except Exception as exc:
         LOG.error(str(exc))

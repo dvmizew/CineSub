@@ -125,16 +125,23 @@ def test_cli_dry_run_sync(sample_video_file: Path, capsys) -> None:
         assert "Dry-Run Simulation" in captured.out
 
 
-def test_cli_bulk(sample_video_file: Path, capsys) -> None:
+def test_cli_download_alternatives(sample_video_file: Path, capsys) -> None:
     dest_srt = sample_video_file.parent / "Inception_1_opensubtitles.srt"
     mock_report = {
-        "command": "bulk",
+        "command": "download",
         "total_files": 1,
         "successful": 1,
         "failed": 0,
         "results": [
             {
                 "video_file": sample_video_file.name,
+                "subtitle": {
+                    "id": "1",
+                    "provider": "opensubtitles",
+                    "release_name": "Inception.1080p",
+                    "score": 100.0,
+                    "saved_path": str(dest_srt),
+                },
                 "subtitles": [
                     {
                         "id": "1",
@@ -156,8 +163,11 @@ def test_cli_bulk(sample_video_file: Path, capsys) -> None:
         ],
     }
 
-    with patch("cinesub.cli.main.download_bulk_batch", return_value=mock_report):
-        app(["bulk", str(sample_video_file), "-l", "en", "-n", "2"])
+    with patch("cinesub.cli.main.download_batch", return_value=mock_report) as mock_batch:
+        app(["download", str(sample_video_file), "-l", "en", "--alternatives", "2"])
+        mock_batch.assert_called_once()
+        _, kwargs = mock_batch.call_args
+        assert kwargs["alternatives"] == 2
         captured = capsys.readouterr()
         assert "Downloaded 2 Subtitle Alternatives" in captured.out
         assert "OPENSUBTITLES" in captured.out

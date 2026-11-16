@@ -14,7 +14,7 @@ from cinesub.core.logger import (
     wait_if_paused,
 )
 from cinesub.core.utils import InterruptedOperationError, is_interruption
-from cinesub.modules.downloader import download_batch, download_bulk_batch
+from cinesub.modules.downloader import download_batch
 from cinesub.modules.extractor import extract_embedded_subtitles_batch
 
 
@@ -101,7 +101,7 @@ def test_download_batch_interruption_graceful(tmp_path: Path) -> None:
         assert len(report["results"]) >= 1
 
 
-def test_download_bulk_batch_interruption_graceful(tmp_path: Path) -> None:
+def test_download_batch_alternatives_interruption_graceful(tmp_path: Path) -> None:
     video_one = tmp_path / "Movie.A.2024.1080p.mp4"
     video_two = tmp_path / "Movie.B.2024.1080p.mp4"
     video_one.write_bytes(b"dummy_data_one")
@@ -110,16 +110,16 @@ def test_download_bulk_batch_interruption_graceful(tmp_path: Path) -> None:
     with (
         patch("cinesub.modules.downloader.get_active_services", return_value={"os": MagicMock()}),
         patch(
-            "cinesub.modules.downloader._batch_bulk_worker",
+            "cinesub.modules.downloader._batch_download_worker",
             side_effect=[
                 {"video_file": "Movie.A.2024.1080p.mp4", "status": "success", "subtitles": []},
                 KeyboardInterrupt(),
             ],
         ),
     ):
-        report = download_bulk_batch(target_path=tmp_path, threads=1)
+        report = download_batch(target_path=tmp_path, alternatives=2, threads=1)
         assert report["interrupted"] is True
-        assert report["command"] == "bulk"
+        assert report["command"] == "download"
 
 
 def test_extract_embedded_subtitles_batch_interruption_graceful(tmp_path: Path) -> None:
