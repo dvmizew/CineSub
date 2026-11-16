@@ -136,10 +136,10 @@ Video File ──► [ 1. 64-bit OSHash ] ──► Exact Hash Match? ───�
 
 ### 1. `cinesub download` (alias: `sync`)
 
-Finds and saves the single highest-scoring subtitle matching your video (`movie.mp4` $\to$ `movie.srt`).
+Finds and saves matching subtitles for your video files (`movie.mp4` $\to$ `movie.srt`). By default, downloads the single highest-scoring subtitle. With `-a` / `--alternatives`, downloads multiple ranked alternatives for comparison (`movie_1_provider.srt`, `movie_2_provider.srt`).
 
 ```bash
-# Download using default language (en, or CINESUB_DEFAULT_LANGUAGE from .env)
+# Download best subtitle using default language (en, or CINESUB_DEFAULT_LANGUAGE from .env)
 cinesub download "Movie.2024.1080p.mp4"
 
 # Download in a specific language (e.g. Romanian)
@@ -147,6 +147,9 @@ cinesub download "Movie.2024.1080p.mp4" -l ro
 
 # Save with Plex/Emby language suffix (Movie.2024.1080p.ro.srt)
 cinesub download "Movie.2024.1080p.mp4" -l ro -S
+
+# Download top 3 ranked subtitle alternatives for manual comparison
+cinesub download "Movie.2024.1080p.mp4" -l ro -a 3
 
 # Batch process a TV show folder with 8 parallel worker threads
 cinesub download "/media/TV/Show.S01" -l ro -S -t 8
@@ -167,6 +170,7 @@ cinesub download "/media/Movies" -l ro -j report.jsonl
 **Key Flags:**
 - `PATH`: Path to a video file or directory.
 - `-l, --language`: ISO 639-1 language code (e.g. `ro`, `en`, `es`, `fr`). Default: `en`.
+- `-a, -n, --alternatives`: Number of subtitle alternatives to download per video. Default: `1`.
 - `-S, --lang-suffix`: Saves subtitle with Plex/Emby language tag (`<stem>.<lang>.srt`).
 - `-p, --provider`: Provider filter (`all`, `opensubtitles`, `subdl`, `subsource`, `subsro`, `betaseries`, `gestdown`, `bsplayer`, `animetosho`, `assrt`). Default: `all`.
 - `-t, --threads`: Worker threads for concurrent batch processing. Default: `4`.
@@ -177,39 +181,7 @@ cinesub download "/media/Movies" -l ro -j report.jsonl
 
 ---
 
-### 2. `cinesub bulk`
-
-Downloads 3–10 subtitle alternatives into the video folder for manual inspection and comparison. Alternatives are saved sequentially as `<stem>_<rank>_<provider>.srt`.
-
-```bash
-# Download top 5 subtitle alternatives for a movie or episode
-cinesub bulk "Episode.S01E01.mkv" -l ro -n 5
-
-# Download top 3 alternatives for an entire TV season with 4 threads
-cinesub bulk "/media/TV/Season1" -l en -n 3 -t 4
-
-# Query a single provider for alternatives
-cinesub bulk "Movie.2024.mp4" -l en -p subdl -n 5
-
-# Dry-run: preview alternative candidates without writing files
-cinesub bulk "/media/TV/Season1" -l ro -n 3 --dry-run
-
-# Export bulk search report to JSONL
-cinesub bulk "/media/TV/Season1" -l ro -n 3 -j bulk_results.jsonl
-```
-
-**Key Flags:**
-- `-n, --limit`: Number of subtitle alternatives to download (1–20). Default: `5`.
-- `-l, --language`: Target subtitle language code. Default: `en`.
-- `-p, --provider`: Provider filter. Default: `all`.
-- `-t, --threads`: Worker threads for directory batching. Default: `4`.
-- `-d, --dry-run`: Simulate search without downloading files.
-- `-f, --force`: Overwrite existing alternative `.srt` files.
-- `-j, --json`: Save structured report to JSON or JSONL.
-
----
-
-### 3. `cinesub extract`
+### 2. `cinesub extract`
 
 Inspects video containers (`.mkv`, `.mp4`, `.m2ts`) using `ffprobe` and extracts embedded text subtitle streams (`subrip`, `srt`, `ass`, `mov_text`, `webvtt`) into companion `.srt` files.
 
@@ -240,7 +212,7 @@ cinesub extract "/media/Movies" -l ro -f
 
 ---
 
-### 4. `cinesub tmdb`
+### 3. `cinesub tmdb`
 
 Queries TMDb for video files or directory names, resolves metadata (IMDb ID, canonical title, release year), and optionally synchronizes matched items directly to your TMDb account Watchlist (Bookmarks) or Favorites.
 
@@ -269,7 +241,7 @@ cinesub tmdb "/media/Movies" -b --dry-run
 
 ---
 
-### 5. `cinesub config`
+### 4. `cinesub config`
 
 Runs a diagnostic health check on your environment. Displays active API credentials, configured rate limits, default language, and checks whether `ffmpeg` and `ffprobe` are installed on your system PATH.
 
@@ -281,7 +253,7 @@ cinesub config
 
 ### Interactive Runtime Controls
 
-During long-running batch operations (`download`, `bulk`, `extract`, `tmdb`), CineSub supports interactive keyboard controls:
+During long-running batch operations (`download`, `extract`, `tmdb`), CineSub supports interactive keyboard controls:
 
 - **`[Space]` or `p`**: Pause/Resume execution. In-flight requests complete cleanly, worker threads pause, and ETA timers halt. Press again to resume.
 - **`Ctrl+C` (SIGINT)**: Gracefully cancel pending operations, shut down thread pools, and export partial reports without leaving orphan temporary files (`.<name>.tmp`).
