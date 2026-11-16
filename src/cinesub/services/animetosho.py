@@ -17,14 +17,11 @@ from cinesub.core.logger import LOG
 from cinesub.core.models import SubtitleMatch, VideoMetadata
 from cinesub.core.ratelimit import ANIMETOSHO_LIMITER
 from cinesub.core.utils import (
-    convert_ass_to_srt_bytes,
     languages_match,
     normalize_language,
     save_subtitle_to_disk,
     score_subtitle_candidate,
 )
-
-_convert_ass_to_srt_bytes = convert_ass_to_srt_bytes
 
 
 class AnimeToshoService:
@@ -157,12 +154,12 @@ class AnimeToshoService:
                     if attachment.get("type") != "subtitle":
                         continue
 
-                    track_info: dict[str, Any] = attachment.get("info", {})
-                    codec_name = str(track_info.get("codec", "")).upper()
+                    track_metadata: dict[str, Any] = attachment.get("info", {})
+                    codec_name = str(track_metadata.get("codec", "")).upper()
                     if codec_name not in ("ASS", "SRT"):
                         continue
 
-                    track_lang = str(track_info.get("lang", "eng")).lower()
+                    track_lang = str(track_metadata.get("lang", "eng")).lower()
                     if not self._match_language(track_lang, target_lang):
                         continue
 
@@ -172,7 +169,7 @@ class AnimeToshoService:
 
                     hex_id = f"{int(attachment_id):08x}"
                     download_url = f"{self.storage_url}/{hex_id}/{attachment_id}.xz"
-                    is_forced = bool(track_info.get("forced", 0))
+                    is_forced = bool(track_metadata.get("forced", 0))
 
                     candidate_score = score_subtitle_candidate(
                         video_meta=video_meta,
@@ -191,7 +188,7 @@ class AnimeToshoService:
                         )
                     )
 
-        matches.sort(key=lambda match_item: match_item.score, reverse=True)
+        matches.sort(key=lambda match_candidate: match_candidate.score, reverse=True)
         return matches
 
     def download(self, subtitle: SubtitleMatch, destination: Path) -> Path:

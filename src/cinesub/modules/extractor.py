@@ -73,18 +73,18 @@ def inspect_embedded_subtitles(video_path: str | Path) -> list[EmbeddedSubtitleT
         return []
 
     tracks: list[EmbeddedSubtitleTrack] = []
-    for s in streams:
-        raw_idx = s.get("index")
+    for stream_entry in streams:
+        raw_idx = stream_entry.get("index")
         if raw_idx is None:
             continue
 
-        codec = str(s.get("codec_name") or "unknown").lower()
-        tags = s.get("tags") or {}
+        codec = str(stream_entry.get("codec_name") or "unknown").lower()
+        tags = stream_entry.get("tags") or {}
         raw_lang = tags.get("language") or "und"
         norm_lang = normalize_language(str(raw_lang)) if raw_lang != "und" else "und"
         stream_title = tags.get("title")
 
-        disposition = s.get("disposition") or {}
+        disposition = stream_entry.get("disposition") or {}
         is_forced = bool(disposition.get("forced", 0))
         is_default = bool(disposition.get("default", 0))
         is_sdh = bool(disposition.get("hearing_impaired", 0)) or (
@@ -117,7 +117,7 @@ def extract_track_to_srt(
         raise RuntimeError("ffmpeg is not installed or not found in system PATH.")
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_target = target_path.parent / f".{target_path.name}.{os.getpid()}.tmp"
+    staging_target = target_path.parent / f".{target_path.name}.{os.getpid()}.tmp"
 
     cmd = [
         ffmpeg_bin,
@@ -129,21 +129,21 @@ def extract_track_to_srt(
         f"0:{track.stream_index}",
         "-c:s",
         "srt",
-        str(temp_target),
+        str(staging_target),
     ]
 
     try:
         subprocess.run(cmd, capture_output=True, check=True)
-        raw_bytes = temp_target.read_bytes()
+        raw_bytes = staging_target.read_bytes()
         normalized_bytes = decode_and_normalize_subtitle_content(raw_bytes)
 
         # Atomic replacement into final destination path
-        temp_target.write_bytes(normalized_bytes)
-        temp_target.replace(target_path)
+        staging_target.write_bytes(normalized_bytes)
+        staging_target.replace(target_path)
         return target_path
     except Exception:
-        if temp_target.exists():
-            temp_target.unlink(missing_ok=True)
+        if staging_target.exists():
+            staging_target.unlink(missing_ok=True)
         raise
 
 

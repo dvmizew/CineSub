@@ -113,17 +113,17 @@ class BsplayerService:
         params = "<username></username><password></password><AppID>BSPlayer v2.72</AppID>"
         return_node = self._send_soap_call("logIn", params)
 
-        data_node = return_node.find("data")
+        token_node = return_node.find("data")
         status_node = return_node.find("status")
         result_node = return_node.find("result")
 
         is_success = (status_node is not None and status_node.text == "OK") or (
             result_node is not None and result_node.text == "200"
         )
-        if not is_success or data_node is None or not data_node.text:
+        if not is_success or token_node is None or not token_node.text:
             raise ConnectionError("BSPlayer anonymous login failed.")
 
-        return data_node.text.strip()
+        return token_node.text.strip()
 
     def _logout(self, token: str) -> None:
         """Close active session handle."""
@@ -140,13 +140,13 @@ class BsplayerService:
         lang_set: set[str] = {norm_lang}
 
         try:
-            lang_obj = Language.fromalpha2(norm_lang)
-            if lang_obj.alpha3:
-                lang_set.add(str(lang_obj.alpha3))
-            if getattr(lang_obj, "alpha3b", None):
-                lang_set.add(str(lang_obj.alpha3b))
-            if getattr(lang_obj, "alpha3t", None):
-                lang_set.add(str(lang_obj.alpha3t))
+            language_instance = Language.fromalpha2(norm_lang)
+            if language_instance.alpha3:
+                lang_set.add(str(language_instance.alpha3))
+            if getattr(language_instance, "alpha3b", None):
+                lang_set.add(str(language_instance.alpha3b))
+            if getattr(language_instance, "alpha3t", None):
+                lang_set.add(str(language_instance.alpha3t))
         except (ValueError, LookupError, BabelfishError):
             pass
 
@@ -201,14 +201,14 @@ class BsplayerService:
             return []
 
         matches: list[SubtitleMatch] = []
-        for item_node in return_node.findall("data/item"):
-            sub_id = item_node.findtext("subID", "").strip()
-            release_name = item_node.findtext("subName", "").strip()
-            download_url = item_node.findtext("subDownloadLink", "").strip()
+        for sub_node in return_node.findall("data/item"):
+            sub_id = sub_node.findtext("subID", "").strip()
+            release_name = sub_node.findtext("subName", "").strip()
+            download_url = sub_node.findtext("subDownloadLink", "").strip()
             if not download_url:
                 continue
 
-            raw_rating = item_node.findtext("subRating", "0").strip()
+            raw_rating = sub_node.findtext("subRating", "0").strip()
             try:
                 rating = float(raw_rating)
             except ValueError:
@@ -235,7 +235,7 @@ class BsplayerService:
                 )
             )
 
-        matches.sort(key=lambda match_item: match_item.score, reverse=True)
+        matches.sort(key=lambda match_candidate: match_candidate.score, reverse=True)
         return matches
 
     def download(self, subtitle: SubtitleMatch, destination: Path) -> Path:

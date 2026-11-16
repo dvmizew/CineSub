@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 
 import httpx
 import orjson
+from rapidfuzz import fuzz
 
 from cinesub.core.constants import (
     SUBSOURCE_API_URL,
@@ -121,7 +122,28 @@ class SubsourceService:
                         break
 
             if target_movie is None:
-                target_movie = movies_list[0]
+                clean_video_title = video_meta.title.strip().lower()
+                best_similarity = 0.0
+                for movie_entry in movies_list:
+                    candidate_title = (
+                        str(movie_entry.get("title") or movie_entry.get("name") or "")
+                        .strip()
+                        .lower()
+                    )
+                    if candidate_title == clean_video_title:
+                        target_movie = movie_entry
+                        break
+                    similarity = fuzz.ratio(candidate_title, clean_video_title)
+                    if similarity > best_similarity:
+                        best_similarity = similarity
+                        if similarity >= 70.0:
+                            target_movie = movie_entry
+
+            if target_movie is None:
+                if len(movies_list) == 1:
+                    target_movie = movies_list[0]
+                else:
+                    return []
 
             movie_id = target_movie.get("id")
             if not movie_id:
@@ -148,16 +170,16 @@ class SubsourceService:
                 return []
 
             results: list[SubtitleMatch] = []
-            for idx, sub_item in enumerate(raw_subtitles):
-                sub_id = str(sub_item.get("id") or f"subsource_{idx}")
+            for idx, candidate_entry in enumerate(raw_subtitles):
+                sub_id = str(candidate_entry.get("id") or f"subsource_{idx}")
                 release_name = (
-                    sub_item.get("release_name")
-                    or sub_item.get("name")
+                    candidate_entry.get("release_name")
+                    or candidate_entry.get("name")
                     or f"{video_meta.title} SubSource {idx + 1}"
                 )
                 dl_path = (
-                    sub_item.get("download_url")
-                    or sub_item.get("url")
+                    candidate_entry.get("download_url")
+                    or candidate_entry.get("url")
                     or f"/subtitles/{sub_id}/download"
                 )
                 if dl_path.startswith("http"):
@@ -165,10 +187,10 @@ class SubsourceService:
                 else:
                     dl_url = urljoin(f"{SUBSOURCE_API_URL}/", dl_path.lstrip("/"))
 
-                downloads = sub_item.get("downloads")
-                rating = sub_item.get("rating")
-                fps = sub_item.get("fps")
-                is_hearing_impaired = bool(sub_item.get("hearing_impaired", False))
+                downloads = candidate_entry.get("downloads")
+                rating = candidate_entry.get("rating")
+                fps = candidate_entry.get("fps")
+                is_hearing_impaired = bool(candidate_entry.get("hearing_impaired", False))
 
                 score = score_subtitle_candidate(
                     video_meta=video_meta,
@@ -181,7 +203,7 @@ class SubsourceService:
                     SubtitleMatch(
                         id=sub_id,
                         provider="subsource",
-                        language=str(sub_item.get("lang") or language).lower(),
+                        language=str(candidate_entry.get("lang") or language).lower(),
                         release_name=release_name,
                         matched_by_hash=False,
                         download_url=dl_url,

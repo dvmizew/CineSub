@@ -120,12 +120,12 @@ class SubsRoService:
                 return []
 
             response_payload = orjson.loads(resp.content)
-            items_list = response_payload.get("items", [])
-            if not isinstance(items_list, list):
+            subtitles_list = response_payload.get("items", [])
+            if not isinstance(subtitles_list, list):
                 return []
 
             results: list[SubtitleMatch] = []
-            for sub_entry in items_list:
+            for sub_entry in subtitles_list:
                 raw_lang = str(sub_entry.get("language") or "ro")
                 entry_lang = normalize_language(raw_lang)
                 if entry_lang != target_lang:

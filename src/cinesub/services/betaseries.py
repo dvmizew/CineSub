@@ -189,22 +189,22 @@ class BetaSeriesService:
         if not isinstance(raw_subtitles, list):
             return []
 
-        # Filter by season and episode
+        # Filter strictly by season and episode
         filtered: list[dict[str, Any]] = []
-        for s in raw_subtitles:
-            season_num = s.get("season")
-            episode_num = s.get("episode")
+        for sub_entry in raw_subtitles:
+            season_num = sub_entry.get("season")
+            episode_num = sub_entry.get("episode")
             if (
                 season_num is not None
                 and episode_num is not None
                 and int(season_num) == video_meta.season
                 and int(episode_num) == video_meta.episode
             ):
-                filtered.append(s)
+                filtered.append(sub_entry)
             elif not season_num and not episode_num:
-                filtered.append(s)
+                filtered.append(sub_entry)
 
-        return filtered if filtered else raw_subtitles
+        return filtered
 
     def _search_movie(self, video_meta: VideoMetadata, language: str) -> list[dict[str, Any]]:
         """Search subtitles for a movie."""

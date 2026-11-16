@@ -164,15 +164,15 @@ class TmdbService:
         if not self.is_configured or (video_meta.imdb_id and video_meta.tmdb_id):
             return video_meta
 
-        media_info = (
+        media_record = (
             self.search_tv(video_meta.title, video_meta.year)
             if video_meta.is_episode
             else self.search_movie(video_meta.title, video_meta.year)
         )
-        if not media_info:
+        if not media_record:
             return video_meta
 
-        tmdb_id = media_info.get("id")
+        tmdb_id = media_record.get("id")
         if tmdb_id:
             video_meta.tmdb_id = int(tmdb_id)
             ext_ids = self.get_external_ids(int(tmdb_id), is_tv=video_meta.is_episode)

@@ -87,12 +87,12 @@ def normalize_language_alpha3(lang: str, bibliographic: bool = False) -> str:
     """Normalize language code or name to standard 3-letter ISO 639-2 code."""
     alpha2 = normalize_language(lang)
     try:
-        lang_obj = Language.fromalpha2(alpha2)
+        language_instance = Language.fromalpha2(alpha2)
         if bibliographic:
-            alpha3b = getattr(lang_obj, "alpha3b", None)
+            alpha3b = getattr(language_instance, "alpha3b", None)
             if alpha3b:
                 return str(alpha3b)
-        return str(lang_obj.alpha3)
+        return str(language_instance.alpha3)
     except (ValueError, LookupError, BabelfishError):
         return alpha2
 
@@ -256,15 +256,15 @@ def convert_ass_to_srt_bytes(ass_bytes: bytes) -> bytes:
 def atomic_write_file(destination: Path, content: bytes) -> Path:
     """Atomically write content bytes to destination path using a temporary hidden file."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temp_file = destination.parent / f".{destination.name}.tmp"
+    staging_file = destination.parent / f".{destination.name}.tmp"
     try:
-        temp_file.write_bytes(content)
-        os.replace(temp_file, destination)
+        staging_file.write_bytes(content)
+        os.replace(staging_file, destination)
         return destination
     finally:
-        if temp_file.exists():
+        if staging_file.exists():
             with contextlib.suppress(OSError):
-                temp_file.unlink()
+                staging_file.unlink()
 
 
 def save_subtitle_to_disk(
@@ -1062,17 +1062,16 @@ def score_subtitle_candidate(
     return score
 
 
-def has_existing_subtitle(video_path: str | Path, language: str | None = None) -> Path | None:
+def has_existing_subtitle(
+    video_path: str | Path,
+    language: str | None = None,
+    use_lang_suffix: bool = False,
+) -> Path | None:
     resolved_video_path = Path(video_path).resolve()
     parent_dir = resolved_video_path.parent
     video_stem = resolved_video_path.stem
 
-    candidates: list[Path] = [
-        parent_dir / f"{video_stem}.srt",
-        parent_dir / f"{video_stem}.default.srt",
-        parent_dir / f"{video_stem}.sdh.srt",
-        parent_dir / f"{video_stem}.forced.srt",
-    ]
+    candidates: list[Path] = []
     if language:
         lang_clean = normalize_language(language)
         candidates.extend(
@@ -1093,14 +1092,25 @@ def has_existing_subtitle(video_path: str | Path, language: str | None = None) -
                 ]
             )
 
+    if not use_lang_suffix:
+        candidates.extend(
+            [
+                parent_dir / f"{video_stem}.srt",
+                parent_dir / f"{video_stem}.default.srt",
+                parent_dir / f"{video_stem}.sdh.srt",
+                parent_dir / f"{video_stem}.forced.srt",
+            ]
+        )
+
     for candidate_path in candidates:
         if candidate_path.is_file() and candidate_path.stat().st_size > 0:
             return candidate_path
 
-    for sub_ext in SUBTITLE_EXTENSIONS:
-        potential_subtitle_path = parent_dir / f"{video_stem}{sub_ext}"
-        if potential_subtitle_path.is_file() and potential_subtitle_path.stat().st_size > 0:
-            return potential_subtitle_path
+    if not use_lang_suffix:
+        for sub_ext in SUBTITLE_EXTENSIONS:
+            potential_subtitle_path = parent_dir / f"{video_stem}{sub_ext}"
+            if potential_subtitle_path.is_file() and potential_subtitle_path.stat().st_size > 0:
+                return potential_subtitle_path
 
     return None
 

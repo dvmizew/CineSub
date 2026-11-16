@@ -319,6 +319,47 @@ def test_subsource_search_and_download(sample_video_meta: VideoMetadata, tmp_pat
         assert "SubSource Subtitle" in target_srt.read_text(encoding="utf-8")
 
 
+def test_subsource_search_fuzzy_mismatch_returns_empty(
+    sample_video_meta: VideoMetadata,
+) -> None:
+    service = SubsourceService(api_key="mock_subsource_key")
+
+    mock_unrelated_movies = {
+        "success": True,
+        "data": [
+            {
+                "id": 999999,
+                "title": "Completely Unrelated Movie Title",
+                "year": 2024,
+                "imdb_id": "tt9999999",
+            },
+            {
+                "id": 888888,
+                "title": "Another Mismatched Cinema Production",
+                "year": 2023,
+                "imdb_id": "tt8888888",
+            },
+        ],
+    }
+
+    with patch(
+        "cinesub.services.subsource.SESSION.request",
+        return_value=httpx.Response(
+            200,
+            json=mock_unrelated_movies,
+            request=httpx.Request("GET", "https://api.subsource.net"),
+        ),
+    ):
+        unmatched_meta = VideoMetadata(
+            file_path=Path("Inception.2010.mkv"),
+            title="Inception",
+            year=2010,
+            imdb_id="tt1375666",
+        )
+        matches = service.search(unmatched_meta, language="ro")
+        assert matches == []
+
+
 def test_tmdb_service_search_and_enrichment(sample_video_meta: VideoMetadata) -> None:
     service = TmdbService(access_token="mock_tmdb_token", account_id="12345")
     assert service.is_configured is True
@@ -591,6 +632,51 @@ def test_betaseries_episode_search(tmp_path: Path) -> None:
         matches = service.search(tv_meta, language="en")
         assert len(matches) == 1
         assert matches[0].id == "5678"
+
+
+def test_betaseries_episode_search_no_match_returns_empty(tmp_path: Path) -> None:
+    service = BetaSeriesService(api_key="mock_bs_key")
+
+    target_tv_meta = VideoMetadata(
+        file_path=tmp_path / "Dark.S01E05.1080p.mkv",
+        title="Dark",
+        season=1,
+        episode=5,
+        is_episode=True,
+        imdb_id="tt5753856",
+    )
+
+    mock_mismatched_payload = {
+        "subtitles": [
+            {
+                "id": 5678,
+                "file": "Dark.S01E01.1080p.NF.WEBRip.srt",
+                "language": "en",
+                "season": 1,
+                "episode": 1,
+                "url": "https://api.betaseries.com/subtitles/5678/download.zip",
+            },
+            {
+                "id": 5679,
+                "file": "Dark.S01E02.1080p.NF.WEBRip.srt",
+                "language": "en",
+                "season": 1,
+                "episode": 2,
+                "url": "https://api.betaseries.com/subtitles/5679/download.zip",
+            },
+        ]
+    }
+
+    with patch(
+        "cinesub.services.betaseries.SESSION.request",
+        return_value=httpx.Response(
+            200,
+            json=mock_mismatched_payload,
+            request=httpx.Request("GET", "https://api.betaseries.com"),
+        ),
+    ):
+        matches = service.search(target_tv_meta, language="en")
+        assert matches == []
 
 
 def test_betaseries_decompression_bomb_protection(tmp_path: Path) -> None:

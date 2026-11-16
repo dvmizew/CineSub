@@ -159,6 +159,17 @@ def test_has_existing_subtitle(tmp_path: Path) -> None:
 
     existing_sub = has_existing_subtitle(video, "ro")
     assert existing_sub == ro_sub
+    assert has_existing_subtitle(video, "ro", use_lang_suffix=True) == ro_sub
+
+    # Verify Plex language suffix isolation: untagged srt does not block ro download
+    # when use_lang_suffix=True
+    video_untagged = tmp_path / "Alien.1979.mkv"
+    video_untagged.write_bytes(b"\x00" * 1024)
+    untagged_sub = tmp_path / "Alien.1979.srt"
+    untagged_sub.write_text("1\n00:00:01,000 --> 00:00:04,000\nAlien\n")
+
+    assert has_existing_subtitle(video_untagged, "ro", use_lang_suffix=True) is None
+    assert has_existing_subtitle(video_untagged, "ro", use_lang_suffix=False) == untagged_sub
 
 
 def test_all_video_container_extensions_accepted(tmp_path: Path) -> None:

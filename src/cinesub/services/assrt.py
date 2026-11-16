@@ -139,8 +139,8 @@ class AssrtService:
             if "英" in desc:
                 languages.add("en")
         elif isinstance(lang_payload, list):
-            for item in lang_payload:
-                languages.add(normalize_language(str(item)))
+            for lang_token in lang_payload:
+                languages.add(normalize_language(str(lang_token)))
         elif isinstance(lang_payload, str):
             languages.add(normalize_language(lang_payload))
 
@@ -217,10 +217,10 @@ class AssrtService:
             download_url = candidate_sub.get("url")
             # If download URL is inside filelist
             if not download_url and candidate_sub.get("filelist"):
-                file_items: list[dict[str, Any]] = candidate_sub["filelist"]
-                for file_item in file_items:
-                    if file_item.get("url"):
-                        download_url = file_item["url"]
+                file_records: list[dict[str, Any]] = candidate_sub["filelist"]
+                for file_record in file_records:
+                    if file_record.get("url"):
+                        download_url = file_record["url"]
                         break
 
             vote_score = candidate_sub.get("vote_score")
@@ -247,7 +247,7 @@ class AssrtService:
                 )
             )
 
-        matches.sort(key=lambda match_item: match_item.score, reverse=True)
+        matches.sort(key=lambda match_candidate: match_candidate.score, reverse=True)
         return matches
 
     def _resolve_download_url(self, subtitle: SubtitleMatch) -> str:

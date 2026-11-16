@@ -114,13 +114,13 @@ class SubdlService:
                 return []
 
             results: list[SubtitleMatch] = []
-            for idx, sub_item in enumerate(response_payload.get("subtitles", [])):
+            for idx, candidate_entry in enumerate(response_payload.get("subtitles", [])):
                 release_name = (
-                    sub_item.get("release_name")
-                    or sub_item.get("name")
+                    candidate_entry.get("release_name")
+                    or candidate_entry.get("name")
                     or f"{video_meta.title} Subtitle {idx + 1}"
                 )
-                raw_url = sub_item.get("download_link") or sub_item.get("url") or ""
+                raw_url = candidate_entry.get("download_link") or candidate_entry.get("url") or ""
                 if raw_url.startswith("http"):
                     dl_url = raw_url
                 else:
@@ -132,18 +132,20 @@ class SubdlService:
                     matched_by_hash=False,
                 )
 
-                sub_id = str(sub_item.get("id") or sub_item.get("file_n_id") or f"subdl_{idx}")
+                sub_id = str(
+                    candidate_entry.get("id") or candidate_entry.get("file_n_id") or f"subdl_{idx}"
+                )
                 results.append(
                     SubtitleMatch(
                         id=sub_id,
                         provider="subdl",
-                        language=(sub_item.get("lang") or language).lower(),
+                        language=(candidate_entry.get("lang") or language).lower(),
                         release_name=release_name,
                         matched_by_hash=False,
                         download_url=dl_url,
                         file_id=sub_id,
-                        hearing_impaired=bool(sub_item.get("hi", False)),
-                        fps=sub_item.get("fps") or sub_item.get("framerate"),
+                        hearing_impaired=bool(candidate_entry.get("hi", False)),
+                        fps=candidate_entry.get("fps") or candidate_entry.get("framerate"),
                         score=score,
                     )
                 )

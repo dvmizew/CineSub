@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 import httpx
 import orjson
+from rapidfuzz import fuzz
 
 from cinesub.core.constants import GESTDOWN_API_URL, USER_AGENT
 from cinesub.core.http import SESSION
@@ -113,8 +114,10 @@ class GestdownService:
         if not shows_list:
             return []
 
-        # Find best matching show by TMDb ID or title similarity
+        # Find best matching show by TMDb ID, exact title, or high fuzzy similarity
         selected_show: dict[str, Any] | None = None
+        best_ratio = 0.0
+
         for candidate_show in shows_list:
             if video_meta.tmdb_id and candidate_show.get("tmdbId") == video_meta.tmdb_id:
                 selected_show = candidate_show
@@ -124,8 +127,15 @@ class GestdownService:
                 selected_show = candidate_show
                 break
 
+            ratio = fuzz.ratio(candidate_name, clean_show_title.lower())
+            if ratio > best_ratio:
+                best_ratio = ratio
+                if ratio >= 70.0:
+                    selected_show = candidate_show
+
         if not selected_show:
-            selected_show = shows_list[0]
+            LOG.debug(f"Gestdown: No show closely matching '{clean_show_title}'.")
+            return []
 
         show_seasons: list[int] = selected_show.get("seasons", [])
         if show_seasons and video_meta.season not in show_seasons:
